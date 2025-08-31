@@ -1,0 +1,26 @@
+# Node & macOS
+node_modules/
+.DS_Store
+npm-debug.log*
+yarn-error.log*
+
+# Logs
+logs/
+*.log
+*.log.*
+
+# Env & local configs
+.env*
+.env.local
+.env.*.local
+
+# Build outputs
+dist/
+build/
+coverage/
+
+# Editor
+.idea/
+.vscode/
+*.swp
+
