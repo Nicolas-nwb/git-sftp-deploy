@@ -1,0 +1,41 @@
+version: "3.9"
+
+services:
+  sftp:
+    build:
+      context: ./docker/sftp
+    ports:
+      - "2222:22"
+    volumes:
+      - ./tests/remote-www:/var/www/html
+      - ./docker/keys/id_ed25519.pub:/home/deploy/.ssh/authorized_keys:ro
+    environment:
+      - TZ=UTC
+    networks:
+      default:
+        aliases:
+          - sftp
+        ipv4_address: 172.28.0.10
+
+  dev:
+    build:
+      context: ./docker/dev
+    depends_on:
+      - sftp
+    working_dir: /workspace
+    volumes:
+      - ./:/workspace
+      - ./docker/keys/id_ed25519:/root/.ssh/id_ed25519:ro
+      - ./docker/dev/ssh_config:/root/.ssh/config:ro
+    environment:
+      - TZ=UTC
+    networks:
+      default:
+        ipv4_address: 172.28.0.11
+
+networks:
+  default:
+    name: git-sftp-deploy_net
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16

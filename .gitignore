@@ -24,3 +24,7 @@ coverage/
 .vscode/
 *.swp
 
+# Docker test artifacts
+docker/keys/
+tests/remote-www/
+src/save-deploy/

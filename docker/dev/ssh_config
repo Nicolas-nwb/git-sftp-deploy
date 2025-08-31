@@ -1,0 +1,10 @@
+# Fichier de configuration SSH pour le conteneur dev
+# Utilisé par le script via SSH_HOST (HostName = sftp service compose)
+
+Host sftp-test
+    HostName 172.28.0.10
+    Port 22
+    User deploy
+    IdentityFile /root/.ssh/id_ed25519
+    StrictHostKeyChecking no
+    UserKnownHostsFile /dev/null
