@@ -209,7 +209,7 @@ create_backup() {
         one_cmd=$(mktemp)
         echo "cd $REMOTE_PATH" > "$one_cmd"
         echo "lcd $backup_dir" >> "$one_cmd"
-        echo "get $file $file" >> "$one_cmd"
+        echo "get -p $file $file" >> "$one_cmd"
         echo "quit" >> "$one_cmd"
         # Ignorer les erreurs si le fichier distant n'existe pas
         $sftp_cmd -b "$one_cmd" >/dev/null 2>&1 || true
@@ -298,6 +298,14 @@ deploy_commit() {
         mkdir -p "$temp_dir/$(dirname "$file")"
         
         if git show "$commit_hash:$full_file_path" > "$temp_dir/$file" 2>/dev/null; then
+            # Ajuster les permissions locales selon le mode Git (préservation exécutable)
+            local mode
+            mode=$(git ls-tree -r "$commit_hash" -- "$full_file_path" | awk '{print $1}' | head -n1 || true)
+            if [ "$mode" = "100755" ]; then
+                chmod 0755 "$temp_dir/$file" || true
+            else
+                chmod 0644 "$temp_dir/$file" || true
+            fi
             log_success "Exporté: $full_file_path -> $file"
         else
             log_error "Erreur lors de l'export de: $full_file_path"
@@ -320,7 +328,7 @@ deploy_commit() {
             if [ "$(dirname "$file")" != "." ]; then
                 echo "mkdir -p $(dirname "$file")" >> "$sftp_script"
             fi
-            echo "put $temp_dir/$file $file" >> "$sftp_script"
+            echo "put -p $temp_dir/$file $file" >> "$sftp_script"
         fi
     done <<< "$files_am"
 
@@ -455,7 +463,7 @@ restore_backup() {
             if [ "$(dirname "$file")" != "." ]; then
                 echo "mkdir -p $(dirname "$file")" >> "$sftp_script"
             fi
-            echo "put $backup_dir/$file $file" >> "$sftp_script"
+            echo "put -p $backup_dir/$file $file" >> "$sftp_script"
         else
             # Le fichier n'existait pas avant le déploiement, le supprimer
             log_info "Suppression: $file (fichier ajouté lors du déploiement)"

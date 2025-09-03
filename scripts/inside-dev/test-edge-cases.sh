@@ -284,6 +284,42 @@ test_parallel_deployments() {
   log "OK parallel deployments"
 }
 
+# 9) Préservation des permissions exécutables (+x) et restauration
+test_preserve_permissions() {
+  log "[case] Preserve permissions (+x)"
+  local repo; repo=$(new_repo perms "perms")
+  ensure_remote_dir "$EDGE_REMOTE_BASE/perms"
+  mkdir -p "$repo/web"
+  cat > "$repo/web/run.sh" <<'EOS'
+#!/bin/sh
+echo RUN
+EOS
+  chmod +x "$repo/web/run.sh"
+  (cd "$repo" && git add -A && git commit -m "v1 exec" -q)
+  deploy_here "$repo"
+
+  # Doit être exécutable à distance
+  remote_has "$EDGE_REMOTE_BASE/perms/run.sh" || fail "run.sh manquant"
+  remote_cmd="test -x '$EDGE_REMOTE_BASE/perms/run.sh'"
+  if ! ssh -q -o LogLevel=ERROR sftp-test "$remote_cmd"; then
+    fail "run.sh n'est pas exécutable après déploiement"
+  fi
+
+  # v2: retirer le bit exécutable
+  chmod -x "$repo/web/run.sh"
+  (cd "$repo" && git add -A && git commit -m "v2 noexec" -q)
+  deploy_here "$repo"
+  if ssh -q -o LogLevel=ERROR sftp-test "test -x '$EDGE_REMOTE_BASE/perms/run.sh'"; then
+    fail "run.sh est encore exécutable après suppression du bit"
+  fi
+
+  # Restaurer la sauvegarde de v2 (retour à l'état pré-v2, donc exécutable)
+  IFS='|' read -r babs brel < <(last_backup_paths)
+  "$SCRIPT" restore "$brel" "$repo/deploy.conf" || fail "restore perms échoué"
+  ssh -q -o LogLevel=ERROR sftp-test "test -x '$EDGE_REMOTE_BASE/perms/run.sh'" || fail "run.sh devrait redevenir exécutable après restore"
+  log "OK preserve permissions"
+}
+
 # --- Orchestration ---
 main() {
   setup_env >/dev/null 2>&1
@@ -296,6 +332,7 @@ main() {
   run_case "Empty and large files" test_empty_and_large_files
   run_case "Symlinks" test_symlinks_support
   run_case "Parallel deployments" test_parallel_deployments
+  run_case "Preserve permissions" test_preserve_permissions
 
   teardown_env >/dev/null 2>&1
 }

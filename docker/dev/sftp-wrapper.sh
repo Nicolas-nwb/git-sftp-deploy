@@ -37,8 +37,9 @@ if [ -z "$remote_base" ]; then
   remote_base="."
 fi
 
-# Collecte des répertoires à créer à partir des lignes `put local remote`
-mapfile -t dirs < <(awk 'tolower($1)=="put" {print $3}' "$batch_file" | xargs -I{} dirname {} | sort -u | sed '/^\.$/d')
+# Collecte des répertoires à créer à partir des lignes `put [-opts] local remote`
+# On prend le dernier champ comme cible distante (remote)
+mapfile -t dirs < <(awk 'tolower($1)=="put" {print $NF}' "$batch_file" | xargs -I{} dirname {} | sort -u | sed '/^\.$/d')
 
 if [ ${#dirs[@]} -gt 0 ]; then
   for d in "${dirs[@]}"; do
