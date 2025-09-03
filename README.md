@@ -53,7 +53,7 @@ src/git-sftp-deploy.sh list
 ## ⚙️ Configuration
 Dans votre projet cible **Cette commande crée un fichier de configuration template** (`deploy.conf` par défaut) que vous devrez personnaliser avec vos paramètres SSH avant de pouvoir déployer.
 ```bash
-./git-sftp-deploy.sh init [chemin/config]
+./src/git-sftp-deploy.sh init [chemin/config]
 ```
 
 ```bash
@@ -85,7 +85,7 @@ LOCAL_ROOT=""                   # Racine locale (vide = racine Git)
 
 **Ce que fait le script de test :**
 
-🔧 **Préparation** : génération clés, build images, démarrage containers  
+🔧 **Préparation** : build images, démarrage containers  
 📁 **Création** : mini-projet web avec sous-dossiers  
 🚀 **Déploiement v1** : déploiement initial  
 📝 **Mise à jour** : modifications + nouveau fichier (v2)  
@@ -94,7 +94,7 @@ LOCAL_ROOT=""                   # Racine locale (vide = racine Git)
 
 ### Contenu de test
 
-Le contenu simulé du serveur est monté dans `tests/remote-www/`
+Le contenu simulé du serveur provient de `tests/remote-www/` (copié dans l'image SFTP)
 
 ## 🏗️ Structure du projet
 
@@ -110,6 +110,26 @@ git-sftp-deploy/
 ├── 📁 scripts/                   # Scripts d'orchestration
 ├── 🧪 tests/                     # Suite de tests
 └── 📖 README.md                  # Cette documentation
+```
+
+## 🔧 Installation (macOS)
+
+```bash
+# Installer la commande globale git-sftp-deploy
+# (copie du script dans /usr/local/bin et rendu exécutable)
+sudo install -m 0755 ./src/git-sftp-deploy.sh /usr/local/bin/git-sftp-deploy
+
+# Vérification
+which git-sftp-deploy && git-sftp-deploy --help
+```
+
+```bash
+# Utilisation dans n'importe quel projet (depuis la racine du repo)
+# 1) Initialiser la config
+git-sftp-deploy init ./deploy.conf
+
+# 2) Déployer le dernier commit
+git-sftp-deploy deploy HEAD ./deploy.conf
 ```
 
 ## 🔒 Sécurité
