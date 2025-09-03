@@ -89,7 +89,7 @@ SSH_HOST="nom-du-host-ssh"
 REMOTE_PATH="/var/www/html"
 
 # Racine locale à partir de laquelle calculer les chemins relatifs
-# Si vide ou ".", utilise la racine du projet Git
+# Si vide ou ".", utilise le dossier courant d'exécution (CWD)
 # Exemple: "src/web" pour déployer seulement le contenu de src/web/
 LOCAL_ROOT=""
 
@@ -125,8 +125,15 @@ load_config() {
     fi
     
     # Normaliser LOCAL_ROOT
+    # Si vide ou '.', utiliser le dossier courant d'exécution (relatif à la racine Git)
+    local cwd_prefix
+    cwd_prefix=""
+    if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        cwd_prefix="$(git rev-parse --show-prefix 2>/dev/null || true)"
+        cwd_prefix="${cwd_prefix%/}"
+    fi
     if [ -z "$LOCAL_ROOT" ] || [ "$LOCAL_ROOT" = "." ]; then
-        LOCAL_ROOT=""
+        LOCAL_ROOT="$cwd_prefix"
     else
         # Supprimer le slash final s'il existe
         LOCAL_ROOT="${LOCAL_ROOT%/}"

@@ -325,6 +325,48 @@ EOS
   log "OK preserve permissions"
 }
 
+# 10) LOCAL_ROOT vide/"." => CWD (sous-dossier)
+test_local_root_cwd_default() {
+  log "[case] LOCAL_ROOT default to CWD"
+  local repo; repo=$(new_repo cwd-default "cwd-default" "")
+  ensure_remote_dir "$EDGE_REMOTE_BASE/cwd-default"
+  mkdir -p "$repo/web/css" "$repo/other"
+  cat > "$repo/web/index.html" <<EOF
+<h1>V1</h1>
+EOF
+  echo "CSS V1" > "$repo/web/css/style.css"
+  echo "OTHER" > "$repo/other/outside.txt"
+  echo "README" > "$repo/README.md"
+  (cd "$repo" && git add -A && git commit -m "v1" -q)
+
+  # Déployer depuis le sous-dossier web avec LOCAL_ROOT vide => doit cibler web/
+  (cd "$repo/web" && "$SCRIPT" deploy HEAD "$repo/deploy.conf") || fail "deploy v1 (cwd)"
+
+  remote_grep "$EDGE_REMOTE_BASE/cwd-default/index.html" "V1" || fail "index non déployé (cwd)"
+  remote_grep "$EDGE_REMOTE_BASE/cwd-default/css/style.css" "CSS V1" || fail "css non déployé (cwd)"
+  remote_not_has "$EDGE_REMOTE_BASE/cwd-default/README.md" || fail "README ne doit pas être déployé"
+  remote_not_has "$EDGE_REMOTE_BASE/cwd-default/outside.txt" || fail "outside ne doit pas être déployé"
+
+  # v2: modifs sous web + ajout en dehors (ne doit pas être déployé)
+  sed -i 's/V1/V2/' "$repo/web/index.html"
+  mkdir -p "$repo/web/img" && echo "IMG" > "$repo/web/img/logo.txt"
+  echo "NO" > "$repo/other/should-not-deploy.txt"
+  (cd "$repo" && git add -A && git commit -m "v2" -q)
+  (cd "$repo/web" && "$SCRIPT" deploy HEAD "$repo/deploy.conf") || fail "deploy v2 (cwd)"
+
+  remote_grep "$EDGE_REMOTE_BASE/cwd-default/index.html" "V2" || fail "index V2 non déployé"
+  remote_has "$EDGE_REMOTE_BASE/cwd-default/img/logo.txt" || fail "logo non déployé"
+  remote_not_has "$EDGE_REMOTE_BASE/cwd-default/should-not-deploy.txt" || fail "fichier hors CWD déployé"
+
+  # Basculer LOCAL_ROOT="." et redéployer une modif sous web
+  sed -i 's#^LOCAL_ROOT=.*#LOCAL_ROOT=\".\"#' "$repo/deploy.conf"
+  sed -i 's/CSS V1/CSS V3/' "$repo/web/css/style.css"
+  (cd "$repo" && git add -A && git commit -m "v3" -q)
+  (cd "$repo/web" && "$SCRIPT" deploy HEAD "$repo/deploy.conf") || fail "deploy v3 (LOCAL_ROOT=.)"
+  remote_grep "$EDGE_REMOTE_BASE/cwd-default/css/style.css" "CSS V3" || fail "css V3 non déployé"
+  log "OK LOCAL_ROOT default to CWD"
+}
+
 # --- Orchestration ---
 main() {
   setup_env >/dev/null 2>&1
@@ -338,6 +380,7 @@ main() {
   run_case "Symlinks" test_symlinks_support
   run_case "Parallel deployments" test_parallel_deployments
   run_case "Preserve permissions" test_preserve_permissions
+  run_case "LOCAL_ROOT default to CWD" test_local_root_cwd_default
 
   teardown_env >/dev/null 2>&1
 }

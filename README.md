@@ -71,13 +71,13 @@ SSH_KEY="~/.ssh/id_rsa"         # Clé SSH (optionnel)
 
 # Chemins
 REMOTE_PATH="/var/www/html"      # Dossier distant
-LOCAL_ROOT=""                   # Racine locale (vide = racine Git)
+LOCAL_ROOT=""                   # Racine locale (vide/"." = dossier courant)
 ```
 
 **Paramètres détaillés :**
 - `SSH_HOST` : alias SSH défini dans `~/.ssh/config`
 - `REMOTE_PATH` : dossier de destination sur le serveur
-- `LOCAL_ROOT` : racine locale à déployer (vide = racine du repo Git)
+- `LOCAL_ROOT` : racine locale à déployer (vide/"." = dossier courant d'exécution)
 - `SSH_USER`, `SSH_PORT`, `SSH_KEY` : paramètres SSH optionnels
 
 ### Sauvegardes
