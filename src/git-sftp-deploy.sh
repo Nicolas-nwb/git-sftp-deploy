@@ -140,6 +140,8 @@ build_ssh_command() {
         ssh_opts="$ssh_opts -i $SSH_KEY"
     fi
     
+    # Mode silencieux systématique pour éviter la verbosité dans les tests
+    ssh_opts="$ssh_opts -q -o LogLevel=ERROR -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
     echo "$cmd_type $ssh_opts $SSH_HOST"
 }
 
@@ -205,7 +207,7 @@ create_backup() {
         echo "get $file $file" >> "$one_cmd"
         echo "quit" >> "$one_cmd"
         # Ignorer les erreurs si le fichier distant n'existe pas
-        $sftp_cmd -b "$one_cmd" 2>/dev/null || true
+        $sftp_cmd -b "$one_cmd" >/dev/null 2>&1 || true
         rm -f "$one_cmd"
     done <<< "$files_list"
     
@@ -305,7 +307,7 @@ deploy_commit() {
     
     # Exécuter SFTP
     local sftp_cmd=$(build_ssh_command "sftp")
-    if $sftp_cmd -b "$sftp_script"; then
+    if $sftp_cmd -b "$sftp_script" >/dev/null; then
         log_success "Déploiement terminé avec succès!"
         log_info "Sauvegarde disponible dans: $backup_dir"
     else
@@ -438,7 +440,7 @@ restore_backup() {
     
     # Exécuter SFTP
     local sftp_cmd=$(build_ssh_command "sftp")
-    if $sftp_cmd -b "$sftp_script"; then
+    if $sftp_cmd -b "$sftp_script" >/dev/null; then
         log_success "Restauration terminée avec succès!"
     else
         log_error "Erreur lors de la restauration"

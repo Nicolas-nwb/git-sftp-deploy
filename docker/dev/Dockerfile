@@ -13,7 +13,13 @@ WORKDIR /workspace
 # Préparer .ssh
 RUN mkdir -p /root/.ssh && chmod 700 /root/.ssh
 
-COPY sftp-wrapper.sh /usr/local/bin/sftp
+# Copier le projet et la config SSH/clé privée dans l'image
+COPY . /workspace
+COPY docker/dev/ssh_config /root/.ssh/config
+COPY docker/keys/id_ed25519 /root/.ssh/id_ed25519
+RUN chmod 600 /root/.ssh/id_ed25519 /root/.ssh/config
+
+COPY docker/dev/sftp-wrapper.sh /usr/local/bin/sftp
 RUN chmod +x /usr/local/bin/sftp
 
 CMD ["bash", "-lc", "echo 'dev container ready'; tail -f /dev/null"]

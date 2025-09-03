@@ -1,14 +1,10 @@
-version: "3.9"
-
 services:
   sftp:
     build:
-      context: ./docker/sftp
-    ports:
-      - "2222:22"
+      context: .
+      dockerfile: docker/sftp/Dockerfile
     volumes:
-      - ./tests/remote-www:/var/www/html
-      - ./docker/keys/id_ed25519.pub:/home/deploy/.ssh/authorized_keys:ro
+      - remote_www:/var/www/html
     environment:
       - TZ=UTC
     networks:
@@ -19,14 +15,12 @@ services:
 
   dev:
     build:
-      context: ./docker/dev
+      context: .
+      dockerfile: docker/dev/Dockerfile
     depends_on:
       - sftp
     working_dir: /workspace
-    volumes:
-      - ./:/workspace
-      - ./docker/keys/id_ed25519:/root/.ssh/id_ed25519:ro
-      - ./docker/dev/ssh_config:/root/.ssh/config:ro
+    volumes: []
     environment:
       - TZ=UTC
     networks:
@@ -39,3 +33,6 @@ networks:
     ipam:
       config:
         - subnet: 172.28.0.0/16
+
+volumes:
+  remote_www:

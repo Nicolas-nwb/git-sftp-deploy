@@ -13,7 +13,9 @@ args=()
 while (( "$#" )); do
   case "$1" in
     -b)
-      batch_file="$2"; shift 2; args+=("-b" "$batch_file");;
+      batch_file="$2"; shift 2;;
+    -o|-P|-i|-F|-c|-S|-J|-s)
+      args+=("$1" "$2"); shift 2;;
     --)
       shift; while (( "$#" )); do args+=("$1"); shift; done; break;;
     -*)
@@ -46,7 +48,7 @@ if [ ${#dirs[@]} -gt 0 ]; then
     else
       target="$d"
     fi
-    ssh "$host" "mkdir -p -- \"$target\"" || true
+    ssh -q -o LogLevel=ERROR -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$host" "mkdir -p -- \"$target\"" || true
   done
 fi
 
@@ -54,4 +56,19 @@ fi
 tmp_batch=$(mktemp)
 awk 'BEGIN{IGNORECASE=1} !($1=="mkdir" && $2=="-p") {print $0}' "$batch_file" > "$tmp_batch"
 
-exec "$real_sftp" -b "$tmp_batch" "$host"
+# Filtrer les options -b existantes des args pour éviter les doublons
+filtered_args=()
+skip_next=0
+for (( i=0; i<${#args[@]}; i++ )); do
+  if [ $skip_next -eq 1 ]; then
+    skip_next=0
+    continue
+  fi
+  if [ "${args[$i]}" = "-b" ]; then
+    skip_next=1
+    continue
+  fi
+  filtered_args+=("${args[$i]}")
+done
+
+exec "$real_sftp" "${filtered_args[@]}" -b "$tmp_batch" "$host"
