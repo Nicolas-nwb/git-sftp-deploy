@@ -187,24 +187,27 @@ create_backup() {
     log_info "Création de la sauvegarde dans: $backup_dir"
     mkdir -p "$backup_dir"
     
-    # Créer le script SFTP pour télécharger les fichiers existants
-    local sftp_script="$backup_dir/backup_commands.txt"
-    
-    # Utiliser les chemins relatifs filtrés pour la sauvegarde
-    for file in $files_list; do
+    # Sauvegarder chaque fichier via une session SFTP indépendante
+    local sftp_cmd=$(build_ssh_command "sftp")
+    while IFS= read -r file; do
+        [ -z "$file" ] && continue
         # Créer le répertoire local si nécessaire
         local local_dir="$backup_dir/$(dirname "$file")"
         if [ "$local_dir" != "$backup_dir/." ]; then
             mkdir -p "$local_dir"
         fi
-        
-        # Commande pour télécharger le fichier s'il existe (chemin relatif sur le serveur)
-        echo "get $REMOTE_PATH/$file $backup_dir/$file" >> "$sftp_script"
-    done
-    
-    # Exécuter SFTP pour la sauvegarde (ignorer les erreurs pour les fichiers inexistants)
-    local sftp_cmd=$(build_ssh_command "sftp")
-    $sftp_cmd -b "$sftp_script" 2>/dev/null || true
+
+        # Batch temporaire pour un fichier
+        local one_cmd
+        one_cmd=$(mktemp)
+        echo "cd $REMOTE_PATH" > "$one_cmd"
+        echo "lcd $backup_dir" >> "$one_cmd"
+        echo "get $file $file" >> "$one_cmd"
+        echo "quit" >> "$one_cmd"
+        # Ignorer les erreurs si le fichier distant n'existe pas
+        $sftp_cmd -b "$one_cmd" 2>/dev/null || true
+        rm -f "$one_cmd"
+    done <<< "$files_list"
     
     # Sauvegarder la liste des fichiers déployés (chemins relatifs)
     echo "$files_list" > "$backup_dir/deployed_files.txt"
@@ -212,7 +215,7 @@ create_backup() {
     # Sauvegarder aussi la configuration LOCAL_ROOT utilisée
     echo "LOCAL_ROOT=\"$LOCAL_ROOT\"" > "$backup_dir/deploy_config.txt"
     
-    rm -f "$sftp_script"
+    # Rien à nettoyer: scripts temporaires déjà supprimés
     echo "$backup_dir"
 }
 
