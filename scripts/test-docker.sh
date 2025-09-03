@@ -22,10 +22,39 @@ echo "timeout" >&2; exit 1
 '
 echo "[orchestrator] SFTP prêt."
 
+run_dev() {
+  local name="$1"; shift
+  local cmd="$*"
+  local logfile
+  logfile="$(mktemp)"
+  set +e
+  docker compose exec -T dev bash -lc "$cmd" >"$logfile" 2>&1
+  local rc=$?
+  set -e
+  if [ $rc -eq 0 ]; then
+    echo "- ${name}: OK"
+    # Affiche un résumé des tests exécutés (lignes commençant par ">> " ou "- ")
+    if grep -Eq '^(>> |- )' "$logfile"; then
+      grep -E '^(>> |- )' "$logfile" | sed 's/^/  /'
+    fi
+    rm -f "$logfile"
+  else
+    echo "- ${name}: FAIL"
+    echo "  Exit code: $rc"
+    echo "  Command: $cmd"
+    echo "  ---- logs ----"
+    cat "$logfile"
+    echo "  ---- debug (bash -x) ----"
+    docker compose exec -T dev bash -lc "set -x; $cmd" || true
+    rm -f "$logfile"
+    exit 1
+  fi
+}
+
 echo "[orchestrator] Lancement des tests de base dans dev..."
-docker compose exec -T dev bash -lc "chmod +x scripts/inside-dev/run-tests.sh && scripts/inside-dev/run-tests.sh"
+run_dev "Basic tests" "chmod +x scripts/inside-dev/run-tests.sh && scripts/inside-dev/run-tests.sh"
 
 echo "[orchestrator] Lancement des tests edge case dans dev..."
-docker compose exec -T dev bash -lc "chmod +x scripts/inside-dev/test-edge-cases.sh && scripts/inside-dev/test-edge-cases.sh"
+run_dev "Edge cases" "chmod +x scripts/inside-dev/test-edge-cases.sh && scripts/inside-dev/test-edge-cases.sh"
 
 echo "[orchestrator] Tous les tests terminés. Contenu distant dans ./tests/remote-www"

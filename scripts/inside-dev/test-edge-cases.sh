@@ -23,8 +23,12 @@ run_case() {
   local name="$1"; shift
   local logfile
   logfile="$(mktemp)"
+  echo ">> ${name}"
   set +e
-  { "$@"; } >"$logfile" 2>&1
+  (
+    set -euo pipefail
+    "$@"
+  ) >"$logfile" 2>&1
   local rc=$?
   set -e
   if [ $rc -eq 0 ]; then
@@ -69,10 +73,11 @@ deploy_here() {
 
 # Dernière sauvegarde HEAD (valeur absolue et relative)
 last_backup_paths() {
+  local repo="$1"
   local last_abs last_rel
-  last_abs=$(ls -1d "$ROOT/src/save-deploy/HEAD"/* 2>/dev/null | sort | tail -n1 || true)
+  last_abs=$(ls -1d "$repo/save-deploy/HEAD"/* 2>/dev/null | sort | tail -n1 || true)
   [ -z "${last_abs:-}" ] && fail "aucune sauvegarde HEAD trouvée"
-  last_rel="${last_abs#"$ROOT/src/save-deploy/"}"
+  last_rel="${last_abs#"$repo/save-deploy/"}"
   echo "$last_abs|$last_rel"
 }
 
@@ -131,7 +136,7 @@ test_deleted_files() {
   remote_grep "$EDGE_REMOTE_BASE/deleted/keep.txt" "KEEP2" || fail "modif keep non déployée"
 
   # Vérifier la sauvegarde inclut le fichier supprimé (pour restauration)
-  IFS='|' read -r babs brel < <(last_backup_paths)
+  IFS='|' read -r babs brel < <(last_backup_paths "$repo")
   grep -q "keep.txt" "$babs/deployed_files.txt" || fail "keep.txt absent de la sauvegarde"
   grep -q "delete-me.txt" "$babs/deployed_files.txt" || fail "delete-me.txt absent de deployed_files"
   test -f "$babs/delete-me.txt" || fail "backup du fichier supprimé manquante"
@@ -188,7 +193,7 @@ EOF
   (cd "$repo" && git add -A && git commit -m "v2" -q)
   deploy_here "$repo"
 
-  IFS='|' read -r babs brel < <(last_backup_paths)
+  IFS='|' read -r babs brel < <(last_backup_paths "$repo")
   # Changer LOCAL_ROOT de la config
   sed -i 's#^LOCAL_ROOT=.*#LOCAL_ROOT=\".\"#' "$repo/deploy.conf"
   "$SCRIPT" restore "$brel" "$repo/deploy.conf" || fail "restore échoué"
@@ -314,7 +319,7 @@ EOS
   fi
 
   # Restaurer la sauvegarde de v2 (retour à l'état pré-v2, donc exécutable)
-  IFS='|' read -r babs brel < <(last_backup_paths)
+  IFS='|' read -r babs brel < <(last_backup_paths "$repo")
   "$SCRIPT" restore "$brel" "$repo/deploy.conf" || fail "restore perms échoué"
   ssh -q -o LogLevel=ERROR sftp-test "test -x '$EDGE_REMOTE_BASE/perms/run.sh'" || fail "run.sh devrait redevenir exécutable après restore"
   log "OK preserve permissions"

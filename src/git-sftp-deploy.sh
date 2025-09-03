@@ -7,7 +7,8 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEFAULT_CONFIG="$SCRIPT_DIR/deploy.conf"
-SAVE_DIR="$SCRIPT_DIR/save-deploy"
+# Dossier de sauvegarde local (dans le répertoire courant d'exécution)
+SAVE_DIR="$PWD/save-deploy"
 
 # Couleurs pour l'affichage
 RED='\033[0;31m'
@@ -47,6 +48,10 @@ SUPPRESSIONS (D):
   - Seules les suppressions présentes dans le commit ciblé sont propagées
   - Avant suppression distante, le fichier est sauvegardé localement (restaurable)
   - Une suppression non commitée (simple effacement local) n'est JAMAIS synchronisée
+
+SAUVEGARDES:
+  - Les sauvegardes sont créées dans ./save-deploy (répertoire courant)
+  - Un fichier .gitignore y est généré pour éviter toute inclusion Git
 
 EXEMPLES:
   $0 init                      # Crée deploy.conf
@@ -147,7 +152,12 @@ build_ssh_command() {
     
     # Mode silencieux systématique pour éviter la verbosité dans les tests
     ssh_opts="$ssh_opts -q -o LogLevel=ERROR -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
-    echo "$cmd_type $ssh_opts $SSH_HOST"
+    # Important: pour ssh, couper stdin (-n) pour ne pas consommer le pipe du while
+    if [ "$cmd_type" = "ssh" ]; then
+        echo "ssh -n $ssh_opts $SSH_HOST"
+    else
+        echo "$cmd_type $ssh_opts $SSH_HOST"
+    fi
 }
 
 # Filtrer les fichiers selon LOCAL_ROOT et calculer les chemins relatifs
@@ -190,37 +200,68 @@ create_backup() {
     local files_list="$2"
     local timestamp=$(date '+%Y-%m-%d_%H-%M-%S')
     local backup_dir="$SAVE_DIR/$commit_ref/$timestamp"
+    local failed=0
     
     log_info "Création de la sauvegarde dans: $backup_dir"
-    mkdir -p "$backup_dir"
+    mkdir -p "$backup_dir" || { log_error "Impossible de créer $backup_dir"; exit 1; }
+    # Assurer la présence d'un .gitignore sous save-deploy (évite la synchro SCM)
+    mkdir -p "$SAVE_DIR" || { log_error "Impossible de préparer $SAVE_DIR"; exit 1; }
+    if [ ! -f "$SAVE_DIR/.gitignore" ]; then
+        echo -e "*\n!.gitignore\n" > "$SAVE_DIR/.gitignore" || { log_error "Impossible d'écrire $SAVE_DIR/.gitignore"; exit 1; }
+    fi
     
-    # Sauvegarder chaque fichier via une session SFTP indépendante
+    # Sauvegarder chaque fichier en lisant le contenu distant (état réel pré-déploiement)
+    local ssh_cmd=$(build_ssh_command "ssh")
     local sftp_cmd=$(build_ssh_command "sftp")
-    while IFS= read -r file; do
+    printf '%s\n' "$files_list" | while IFS= read -r file; do
         [ -z "$file" ] && continue
+        log_info "Backup: vérification $file"
         # Créer le répertoire local si nécessaire
         local local_dir="$backup_dir/$(dirname "$file")"
         if [ "$local_dir" != "$backup_dir/." ]; then
-            mkdir -p "$local_dir"
+            mkdir -p "$local_dir" || { log_error "Impossible de créer $local_dir"; failed=1; continue; }
         fi
 
-        # Batch temporaire pour un fichier
-        local one_cmd
-        one_cmd=$(mktemp)
-        echo "cd $REMOTE_PATH" > "$one_cmd"
-        echo "lcd $backup_dir" >> "$one_cmd"
-        echo "get -p $file $file" >> "$one_cmd"
-        echo "quit" >> "$one_cmd"
-        # Ignorer les erreurs si le fichier distant n'existe pas
-        $sftp_cmd -b "$one_cmd" >/dev/null 2>&1 || true
-        rm -f "$one_cmd"
-    done <<< "$files_list"
+        # Vérifier existence distante (0: existe, 1: absent, autre: erreur SSH)
+        set +e
+        $ssh_cmd "test -r \"$REMOTE_PATH/$file\""
+        local exists_rc=$?
+        set -e
+        if [ $exists_rc -eq 0 ]; then
+            log_info "Backup: capture $file depuis le serveur"
+            local one_cmd
+            one_cmd=$(mktemp)
+            echo "cd $REMOTE_PATH" > "$one_cmd"
+            echo "lcd $backup_dir" >> "$one_cmd"
+            echo "get -p $file $file" >> "$one_cmd"
+            echo "quit" >> "$one_cmd"
+            if ! $sftp_cmd -b "$one_cmd" >/dev/null 2>&1; then
+                log_error "Echec sauvegarde du fichier (sftp): $file"
+                failed=1
+            fi
+            rm -f "$one_cmd"
+            # Vérifier présence locale attendue
+            if [ ! -f "$backup_dir/$file" ]; then
+                log_error "Sauvegarde manquante pour: $file"
+                failed=1
+            fi
+        elif [ $exists_rc -ne 1 ]; then
+            log_error "Erreur SSH lors de la vérification de: $file (code $exists_rc)"
+            failed=1
+        fi
+    done
     
+    # Si erreurs, interrompre le déploiement
+    if [ $failed -ne 0 ]; then
+        log_error "Sauvegarde incomplète: annulation du déploiement"
+        exit 1
+    fi
+
     # Sauvegarder la liste des fichiers déployés (chemins relatifs)
-    echo "$files_list" > "$backup_dir/deployed_files.txt"
+    echo "$files_list" > "$backup_dir/deployed_files.txt" || { log_error "Impossible d'écrire deployed_files.txt"; exit 1; }
     
-    # Sauvegarder aussi la configuration LOCAL_ROOT utilisée
-    echo "LOCAL_ROOT=\"$LOCAL_ROOT\"" > "$backup_dir/deploy_config.txt"
+    # Sauvegarder la configuration minimale utilisée
+    echo "LOCAL_ROOT=\"$LOCAL_ROOT\"" > "$backup_dir/deploy_config.txt" || { log_error "Impossible d'écrire deploy_config.txt"; exit 1; }
     
     # Rien à nettoyer: scripts temporaires déjà supprimés
     echo "$backup_dir"
@@ -280,6 +321,7 @@ deploy_commit() {
     fi
 
     # Créer la sauvegarde avant action (inclut A/M et D)
+    log_info "Backup: liste des fichiers à sauvegarder:"; echo "$files_for_backup"
     local backup_dir
     backup_dir=$(create_backup "$commit_hash" "$files_for_backup")
     log_success "Sauvegarde créée: $backup_dir"
@@ -415,9 +457,21 @@ restore_backup() {
         backup_dir=$(select_backup)
     fi
     
-    # Si le chemin est relatif, le préfixer avec SAVE_DIR
+    # Résolution du chemin de sauvegarde
     if [[ ! "$backup_dir" =~ ^/ ]]; then
-        backup_dir="$SAVE_DIR/$backup_dir"
+        # 1) Preferer SAVE_DIR courant
+        if [ -d "$SAVE_DIR/$backup_dir" ]; then
+            backup_dir="$SAVE_DIR/$backup_dir"
+        else
+            # 2) Sinon, utiliser le dossier de la config (repo) + save-deploy
+            local conf_dir
+            conf_dir=$(cd "$(dirname "$config_file")" && pwd)
+            if [ -d "$conf_dir/save-deploy/$backup_dir" ]; then
+                backup_dir="$conf_dir/save-deploy/$backup_dir"
+            else
+                backup_dir="$SAVE_DIR/$backup_dir" # garde la valeur par défaut (provoquera une erreur claire ensuite)
+            fi
+        fi
     fi
     
     if [ ! -d "$backup_dir" ]; then

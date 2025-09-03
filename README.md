@@ -80,6 +80,12 @@ LOCAL_ROOT=""                   # Racine locale (vide = racine Git)
 - `LOCAL_ROOT` : racine locale à déployer (vide = racine du repo Git)
 - `SSH_USER`, `SSH_PORT`, `SSH_KEY` : paramètres SSH optionnels
 
+### Sauvegardes
+
+- Lieu: `./save-deploy` dans le répertoire courant d'exécution.
+- Un fichier `.gitignore` est généré dans `save-deploy/` pour éviter toute synchro Git.
+- Le déploiement est annulé si la sauvegarde échoue (droits/SSH, etc.).
+
 ## 🗑️ Synchronisation des suppressions (D)
 
 - Portée stricte: seules les suppressions présentes dans le commit déployé sont propagées.

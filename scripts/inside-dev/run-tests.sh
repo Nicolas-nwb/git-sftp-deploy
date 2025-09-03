@@ -69,8 +69,8 @@ sed -i 's#^LOCAL_ROOT=.*#LOCAL_ROOT="web"#' /workspace/tests/project/deploy.conf
 
 log "Déploiement HEAD (v1)..."
 /workspace/src/git-sftp-deploy.sh deploy HEAD /workspace/tests/project/deploy.conf || fail "déploiement v1 échoué"
-backup1_abs=$(ls -1d /workspace/src/save-deploy/HEAD/* | sort | tail -n1)
-backup1_rel="${backup1_abs#/workspace/src/save-deploy/}"
+backup1_abs=$(ls -1d /workspace/tests/project/save-deploy/HEAD/* | sort | tail -n1)
+backup1_rel="${backup1_abs#/workspace/tests/project/save-deploy/}"
 
 log "Vérification côté distant..."
 ssh -q -o LogLevel=ERROR sftp-test "test -f /var/www/html/index.html" || fail "index.html absent côté distant"
@@ -87,8 +87,8 @@ git commit -m "feat: v2 update and new file" -q
 
 log "Déploiement HEAD (v2)..."
 /workspace/src/git-sftp-deploy.sh deploy HEAD /workspace/tests/project/deploy.conf || fail "déploiement v2 échoué"
-backup2_abs=$(ls -1d /workspace/src/save-deploy/HEAD/* | sort | tail -n1)
-backup2_rel="${backup2_abs#/workspace/src/save-deploy/}"
+backup2_abs=$(ls -1d /workspace/tests/project/save-deploy/HEAD/* | sort | tail -n1)
+backup2_rel="${backup2_abs#/workspace/tests/project/save-deploy/}"
 
 log "Vérification côté distant (v2)..."
 ssh -q -o LogLevel=ERROR sftp-test "grep -q 'Hello v2' /var/www/html/index.html" || fail "contenu index v2 incorrect"
