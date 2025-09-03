@@ -28,10 +28,10 @@ show_help() {
 Usage: $0 [OPTION] [ARGUMENTS]
 
 COMMANDES:
-  init [config-file]           Initialise un fichier de configuration template
-  deploy <commit> [config]     Déploie les fichiers d'un commit avec sauvegarde
-  restore [backup-dir] [config] Restaure depuis une sauvegarde
-  list [config]                Liste les sauvegardes disponibles
+  init [config-file]             Initialise un fichier de configuration template
+  deploy <commit> [config]       Déploie les changements (A/M/D) d'un commit avec sauvegarde
+  restore [backup-dir] [config]  Restaure depuis une sauvegarde
+  list [config]                  Liste les sauvegardes disponibles
 
 CONFIGURATION:
   Le fichier de configuration permet de définir:
@@ -42,6 +42,11 @@ CONFIGURATION:
   Exemple avec LOCAL_ROOT="src/web":
   - Commit modifie: src/web/index.html, src/web/css/style.css, README.md
   - Fichiers déployés: index.html, css/style.css (README.md ignoré)
+
+SUPPRESSIONS (D):
+  - Seules les suppressions présentes dans le commit ciblé sont propagées
+  - Avant suppression distante, le fichier est sauvegardé localement (restaurable)
+  - Une suppression non commitée (simple effacement local) n'est JAMAIS synchronisée
 
 EXEMPLES:
   $0 init                      # Crée deploy.conf
@@ -234,34 +239,49 @@ deploy_commit() {
     
     load_config "$config_file"
     
-    log_info "Récupération des fichiers modifiés dans le commit $commit_hash..."
-    
-    # Récupérer les fichiers modifiés/ajoutés dans le commit
-    local all_files=$(git diff-tree --no-commit-id --name-only --diff-filter=AM -r "$commit_hash")
-    
-    if [ -z "$all_files" ]; then
-        log_warning "Aucun fichier modifié dans ce commit"
-        exit 0
-    fi
-    
+    log_info "Récupération des changements du commit $commit_hash..."
+
+    # Récupérer listes AM (ajout/modif) et D (suppression) sur le commit ciblé uniquement
+    local all_added_modified
+    all_added_modified=$(git diff-tree --no-commit-id --name-only --diff-filter=AM -r "$commit_hash")
+    local all_deleted
+    all_deleted=$(git diff-tree --no-commit-id --name-only --diff-filter=D -r "$commit_hash")
+
     # Filtrer selon LOCAL_ROOT et calculer les chemins relatifs
-    local files=$(filter_and_relativize_files "$all_files")
-    
-    if [ -z "$files" ]; then
+    local files_am files_del
+    files_am=$(filter_and_relativize_files "$all_added_modified")
+    files_del=$(filter_and_relativize_files "$all_deleted")
+
+    # Construire la liste unique pour la sauvegarde (AM ∪ D)
+    local files_for_backup
+    files_for_backup=$(printf "%s\n%s\n" "$files_am" "$files_del" | sed '/^$/d' | awk '!seen[$0]++')
+
+    if [ -z "$files_for_backup" ]; then
         if [ -n "$LOCAL_ROOT" ]; then
-            log_warning "Aucun fichier à déployer dans $LOCAL_ROOT pour ce commit"
+            log_warning "Aucun changement à traiter dans $LOCAL_ROOT pour ce commit"
         else
-            log_warning "Aucun fichier à déployer dans ce commit"
+            log_warning "Aucun changement à traiter dans ce commit"
         fi
         exit 0
     fi
-    
+
     log_info "Racine locale: ${LOCAL_ROOT:-"(racine du projet)"}"
-    log_info "Fichiers à déployer:"
-    echo "$files"
-    
-    # Créer la sauvegarde avant déploiement (avec les chemins relatifs)
-    local backup_dir=$(create_backup "$commit_hash" "$files")
+    if [ -n "$files_am" ]; then
+        log_info "Fichiers à déployer (A/M):"
+        echo "$files_am"
+    else
+        log_info "Aucun fichier à déployer (A/M)"
+    fi
+    if [ -n "$files_del" ]; then
+        log_info "Fichiers à supprimer (D):"
+        echo "$files_del"
+    else
+        log_info "Aucun fichier à supprimer (D)"
+    fi
+
+    # Créer la sauvegarde avant action (inclut A/M et D)
+    local backup_dir
+    backup_dir=$(create_backup "$commit_hash" "$files_for_backup")
     log_success "Sauvegarde créée: $backup_dir"
     
     # Créer un dossier temporaire pour exporter les fichiers
@@ -272,7 +292,8 @@ deploy_commit() {
     while IFS= read -r file; do
         [ -z "$file" ] && continue
         
-        local full_file_path=$(get_full_file_path "$file")
+        local full_file_path
+        full_file_path=$(get_full_file_path "$file")
         
         mkdir -p "$temp_dir/$(dirname "$file")"
         
@@ -283,7 +304,7 @@ deploy_commit() {
             rm -rf "$temp_dir"
             exit 1
         fi
-    done <<< "$files"
+    done <<< "$files_am"
     
     log_info "Upload vers SFTP..."
     
@@ -295,13 +316,19 @@ deploy_commit() {
         [ -z "$file" ] && continue
         
         if [ -f "$temp_dir/$file" ]; then
-            # Créer le répertoire distant si nécessaire
+            # Créer le répertoire distant si nécessaire (géré par wrapper sftp)
             if [ "$(dirname "$file")" != "." ]; then
                 echo "mkdir -p $(dirname "$file")" >> "$sftp_script"
             fi
             echo "put $temp_dir/$file $file" >> "$sftp_script"
         fi
-    done <<< "$files"
+    done <<< "$files_am"
+
+    # Ajouter les suppressions (uniquement celles du commit)
+    while IFS= read -r dfile; do
+        [ -z "$dfile" ] && continue
+        echo "rm $dfile" >> "$sftp_script"
+    done <<< "$files_del"
     
     echo "quit" >> "$sftp_script"
     

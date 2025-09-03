@@ -12,6 +12,7 @@
 ✅ **Déploiement intelligent** : uniquement les fichiers modifiés d'un commit  
 ✅ **Sauvegarde automatique** : état distant préservé avant chaque déploiement  
 ✅ **Restauration précise** : retour à l'état antérieur en un clic  
+✅ **Suppression ciblée** : seules les suppressions du commit sont propagées (avec sauvegarde)  
 ✅ **Gestion des sous-dossiers** : structure complète préservée  
 
 ## 💻 Utilisation
@@ -27,6 +28,11 @@ src/git-sftp-deploy.sh deploy <commit-ish> [chemin/config]
 # Déployer le dernier commit
 src/git-sftp-deploy.sh deploy HEAD
 ```
+
+Notes:
+- Uniquement les changements du commit ciblé sont pris en compte (A/M/D).
+- Les suppressions (D) du commit sont supprimées côté serveur APRÈS sauvegarde.
+- Une suppression locale non commitée n'est jamais synchronisée.
 
 #### 🔄 Restauration
 ```bash
@@ -74,12 +80,33 @@ LOCAL_ROOT=""                   # Racine locale (vide = racine Git)
 - `LOCAL_ROOT` : racine locale à déployer (vide = racine du repo Git)
 - `SSH_USER`, `SSH_PORT`, `SSH_KEY` : paramètres SSH optionnels
 
+## 🗑️ Synchronisation des suppressions (D)
+
+- Portée stricte: seules les suppressions présentes dans le commit déployé sont propagées.
+- Sauvegarde préalable: chaque fichier à supprimer est d'abord copié vers `save-deploy/<commit>/<timestamp>/`.
+- Restauration: un `restore` ré-upload ces fichiers supprimés pour revenir à l'état précédent.
+- Respect de `LOCAL_ROOT`: seules les suppressions situées sous `LOCAL_ROOT` sont considérées.
+
+Exemple rapide:
+```bash
+# v1
+echo "A" > web/a.txt && git add -A && git commit -m "v1"
+git-sftp-deploy deploy HEAD ./deploy.conf   # a.txt est uploadé
+
+# v2: suppression commitée
+git rm web/a.txt && git commit -m "v2 delete a.txt"
+git-sftp-deploy deploy HEAD ./deploy.conf   # a.txt est SUPPRIMÉ côté serveur (sauvegardé localement)
+
+# Restauration
+# (ré-upload de a.txt depuis la sauvegarde)
+git-sftp-deploy restore save-deploy/HEAD/<timestamp> ./deploy.conf
+```
+
 ## 🧪 Tests
 
 ### Suite de tests complète
 
 ```bash
-# Lancement automatique des tests
 ./scripts/test-docker.sh
 ```
 

@@ -102,7 +102,7 @@ teardown_env() {
 }
 
 # --- Tests ---
-# 1) Suppressions: vérifier que D n'est pas déployé (fichier reste présent)
+# 1) Suppressions: seules les D dans le commit sont synchronisées (backup + rm)
 test_deleted_files() {
   log "[case] Deleted files"
   local repo; repo=$(new_repo deleted "deleted")
@@ -116,20 +116,30 @@ test_deleted_files() {
   remote_has "$EDGE_REMOTE_BASE/deleted/delete-me.txt" || fail "delete-me.txt manquant après v1"
   remote_grep "$EDGE_REMOTE_BASE/deleted/keep.txt" "KEEP1" || fail "contenu keep v1"
 
+  # Suppression non commitée: ne doit PAS supprimer à distance
   rm -f "$repo/web/delete-me.txt"
+  deploy_here "$repo"
+  remote_grep "$EDGE_REMOTE_BASE/deleted/delete-me.txt" "DEL1" || fail "suppression non commitée propagée"
+
+  # Commit de la suppression + modif
   sed -i 's/KEEP1/KEEP2/' "$repo/web/keep.txt"
   (cd "$repo" && git add -A && git commit -m "v2 delete+modify" -q)
   deploy_here "$repo"
 
-  # Fichier supprimé ne doit pas être supprimé côté distant (non géré)
-  remote_grep "$EDGE_REMOTE_BASE/deleted/delete-me.txt" "DEL1" || fail "suppression déployée à tort"
+  # Fichier supprimé doit être supprimé côté distant (car dans le commit)
+  remote_not_has "$EDGE_REMOTE_BASE/deleted/delete-me.txt" || fail "fichier supprimé resté présent"
+  remote_grep "$EDGE_REMOTE_BASE/deleted/keep.txt" "KEEP2" || fail "modif keep non déployée"
 
-  # Vérifier la liste des fichiers déployés (pas de delete-me.txt)
+  # Vérifier la sauvegarde inclut le fichier supprimé (pour restauration)
   IFS='|' read -r babs brel < <(last_backup_paths)
   grep -q "keep.txt" "$babs/deployed_files.txt" || fail "keep.txt absent de la sauvegarde"
-  if grep -q "delete-me.txt" "$babs/deployed_files.txt"; then
-    fail "delete-me.txt ne doit pas figurer dans deployed_files"
-  fi
+  grep -q "delete-me.txt" "$babs/deployed_files.txt" || fail "delete-me.txt absent de deployed_files"
+  test -f "$babs/delete-me.txt" || fail "backup du fichier supprimé manquante"
+  grep -q "DEL1" "$babs/delete-me.txt" || fail "contenu backup incorrect pour delete-me.txt"
+
+  # Restauration: le fichier supprimé doit revenir
+  "$SCRIPT" restore "$brel" "$repo/deploy.conf" || fail "restore échoué"
+  remote_grep "$EDGE_REMOTE_BASE/deleted/delete-me.txt" "DEL1" || fail "restore n'a pas restauré le fichier supprimé"
   log "OK deleted files"
 }
 
