@@ -43,6 +43,16 @@ src/git-sftp-deploy.sh restore [save-deploy/<commit>/<timestamp>] [chemin/config
 src/git-sftp-deploy.sh list
 ```
 
+Note: en fin de déploiement, la commande exacte de restauration est affichée pour faciliter un rollback immédiat.
+
+#### 🔐 Restauration stricte (garanties)
+- Aucune restauration depuis Git: seules les données présentes dans le dossier de sauvegarde sont utilisées.
+- Cas des statuts du commit déployé:
+  - A (ajout): le fichier est supprimé lors d’une restauration (pas de backup attendu).
+  - M (modifié): la restauration exige la présence du fichier dans la sauvegarde, sinon échec immédiat.
+  - D (supprimé): la restauration exige la présence du fichier dans la sauvegarde, sinon échec immédiat.
+- Les suppressions distantes de fichiers déjà absents sont tolérées (non bloquant).
+
 ### Exemples d'usage
 
 ```bash
@@ -68,6 +78,7 @@ SSH_HOST="mon-serveur"          # Alias SSH (~/.ssh/config)
 SSH_USER="deploy"               # Utilisateur (optionnel)
 SSH_PORT="22"                   # Port SSH (optionnel)
 SSH_KEY="~/.ssh/id_rsa"         # Clé SSH (optionnel)
+SSH_CONFIG_FILE="~/.ssh/config" # Fichier de config SSH (optionnel)
 
 # Chemins
 REMOTE_PATH="/var/www/html"      # Dossier distant
@@ -85,6 +96,7 @@ LOCAL_ROOT=""                   # Racine locale (vide/"." = dossier courant)
 - Lieu: `./save-deploy` dans le répertoire courant d'exécution.
 - Un fichier `.gitignore` est généré dans `save-deploy/` pour éviter toute synchro Git.
 - Le déploiement est annulé si la sauvegarde échoue (droits/SSH, etc.).
+- Contenu: la sauvegarde contient les fichiers nécessaires à la restauration de l’état précédent (modifiés et supprimés), ainsi qu’un `am_status.txt` (A/M du commit) et la liste `deployed_files.txt`.
 
 ## 🗑️ Synchronisation des suppressions (D)
 

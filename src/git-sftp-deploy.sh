@@ -101,6 +101,10 @@ LOCAL_ROOT=""
 
 # Optionnel: clé SSH spécifique (si différente de celle dans .ssh/config)
 # SSH_KEY="~/.ssh/id_rsa_specific"
+
+# Optionnel: fichier de configuration SSH spécifique (par défaut: ~/.ssh/config)
+# Utile si vous souhaitez pointer vers un fichier alternatif
+# SSH_CONFIG_FILE="~/.ssh/config"
 EOF
 
     log_success "Fichier de configuration créé: $config_file"
@@ -143,27 +147,42 @@ load_config() {
 # Construire la commande SSH/SFTP avec les paramètres
 build_ssh_command() {
     local cmd_type="$1"  # ssh ou sftp
-    local ssh_opts=""
+    #
+    # Construction robuste des options pour ssh/sftp
+    # - sftp: pas de '-p <port>' (collision avec 'preserve') -> utiliser -o Port
+    # - sftp: pas de '-l <user>' (limite bande passante)     -> utiliser -o User
+    # - support optionnel d'un fichier de config SSH dédié via SSH_CONFIG_FILE
+    #
+    local parts=()
     
-    if [ -n "$SSH_USER" ]; then
-        ssh_opts="$ssh_opts -l $SSH_USER"
+    # Fichier de config SSH spécifique
+    if [ -n "$SSH_CONFIG_FILE" ]; then
+        parts+=("-F" "$SSH_CONFIG_FILE")
     fi
     
-    if [ -n "$SSH_PORT" ]; then
-        ssh_opts="$ssh_opts -p $SSH_PORT"
-    fi
-    
+    # Clé privée explicite
     if [ -n "$SSH_KEY" ]; then
-        ssh_opts="$ssh_opts -i $SSH_KEY"
+        parts+=("-i" "$SSH_KEY")
     fi
     
-    # Mode silencieux systématique pour éviter la verbosité dans les tests
-    ssh_opts="$ssh_opts -q -o LogLevel=ERROR -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
-    # Important: pour ssh, couper stdin (-n) pour ne pas consommer le pipe du while
+    # Options communes de sécurité/verbosité/fiabilité
+    parts+=("-o" "LogLevel=ERROR" "-o" "StrictHostKeyChecking=no" "-o" "UserKnownHostsFile=/dev/null" \
+            "-o" "BatchMode=yes" "-o" "ConnectTimeout=10" "-o" "ServerAliveInterval=15" "-o" "ServerAliveCountMax=3")
+    
+    # Forcer User/Port via -o (fonctionne pour ssh et sftp)
+    if [ -n "$SSH_USER" ]; then
+        parts+=("-o" "User=$SSH_USER")
+    fi
+    if [ -n "$SSH_PORT" ]; then
+        parts+=("-o" "Port=$SSH_PORT")
+    fi
+    
     if [ "$cmd_type" = "ssh" ]; then
-        echo "ssh -n $ssh_opts $SSH_HOST"
+        # Important: -n pour ne pas consommer stdin dans les boucles
+        echo "ssh -n ${parts[*]} $SSH_HOST"
     else
-        echo "$cmd_type $ssh_opts $SSH_HOST"
+        # sftp: retourner la commande SANS destination; l'appelant ajoutera '-b <file> HOST'
+        echo "sftp -q ${parts[*]}"
     fi
 }
 
@@ -172,21 +191,23 @@ filter_and_relativize_files() {
     local files_list="$1"
     local filtered_files=""
     
-    for file in $files_list; do
+    # Parcours ligne par ligne (préserve espaces)
+    while IFS= read -r file; do
+        [ -z "$file" ] && continue
         if [ -n "$LOCAL_ROOT" ]; then
             # Vérifier si le fichier est dans LOCAL_ROOT
             if [[ "$file" == "$LOCAL_ROOT"/* ]]; then
                 # Calculer le chemin relatif en supprimant LOCAL_ROOT/
                 local relative_file="${file#$LOCAL_ROOT/}"
-                filtered_files="$filtered_files$relative_file\n"
+                filtered_files+="$relative_file\n"
             fi
         else
             # Pas de LOCAL_ROOT, utiliser le fichier tel quel
-            filtered_files="$filtered_files$file\n"
+            filtered_files+="$file\n"
         fi
-    done
+    done <<< "$files_list"
     
-    # Supprimer le dernier \n et retourner
+    # Supprimer les lignes vides et retourner
     echo -e "$filtered_files" | sed '/^$/d'
 }
 
@@ -217,58 +238,82 @@ create_backup() {
         echo -e "*\n!.gitignore\n" > "$SAVE_DIR/.gitignore" || { log_error "Impossible d'écrire $SAVE_DIR/.gitignore"; exit 1; }
     fi
     
-    # Sauvegarder chaque fichier en lisant le contenu distant (état réel pré-déploiement)
+    # 1) Vérifier que le répertoire distant existe
     local ssh_cmd=$(build_ssh_command "ssh")
     local sftp_cmd=$(build_ssh_command "sftp")
-    printf '%s\n' "$files_list" | while IFS= read -r file; do
+    if ! $ssh_cmd "test -d \"$REMOTE_PATH\""; then
+        log_error "Répertoire distant introuvable: $REMOTE_PATH"
+        exit 1
+    fi
+
+    # 2) Pré-créer tous les répertoires locaux requis
+    while IFS= read -r file; do
         [ -z "$file" ] && continue
-        log_info "Backup: vérification $file"
-        # Créer le répertoire local si nécessaire
         local local_dir="$backup_dir/$(dirname "$file")"
         if [ "$local_dir" != "$backup_dir/." ]; then
-            mkdir -p "$local_dir" || { log_error "Impossible de créer $local_dir"; failed=1; continue; }
+            mkdir -p "$local_dir" || { log_error "Impossible de créer $local_dir"; failed=1; }
         fi
+    done <<< "$files_list"
 
-        # Vérifier existence distante (0: existe, 1: absent, autre: erreur SSH)
-        set +e
-        $ssh_cmd "test -r \"$REMOTE_PATH/$file\""
-        local exists_rc=$?
-        set -e
-        if [ $exists_rc -eq 0 ]; then
-            log_info "Backup: capture $file depuis le serveur"
-            local one_cmd
-            one_cmd=$(mktemp)
-            echo "cd $REMOTE_PATH" > "$one_cmd"
-            echo "lcd $backup_dir" >> "$one_cmd"
-            echo "get -p $file $file" >> "$one_cmd"
-            echo "quit" >> "$one_cmd"
-            if ! $sftp_cmd -b "$one_cmd" >/dev/null 2>&1; then
-                log_error "Echec sauvegarde du fichier (sftp): $file"
-                failed=1
-            fi
-            rm -f "$one_cmd"
-            # Vérifier présence locale attendue
-            if [ ! -f "$backup_dir/$file" ]; then
-                log_error "Sauvegarde manquante pour: $file"
-                failed=1
-            fi
-        elif [ $exists_rc -ne 1 ]; then
-            log_error "Erreur SSH lors de la vérification de: $file (code $exists_rc)"
-            failed=1
+    # 3) Construire un unique batch SFTP avec tous les 'get'
+    local files_count
+    files_count=$(printf '%s\n' "$files_list" | sed '/^$/d' | wc -l | tr -d ' ')
+    log_info "Backup: capture en lot ($files_count fichiers)..."
+    local one_cmd
+    one_cmd=$(mktemp)
+    echo "cd $REMOTE_PATH" > "$one_cmd"
+    echo "lcd $backup_dir" >> "$one_cmd"
+    while IFS= read -r file; do
+        [ -z "$file" ] && continue
+        echo "get -p $file $file" >> "$one_cmd"
+    done <<< "$files_list"
+    echo "quit" >> "$one_cmd"
+
+    # 4) Exécuter une seule session SFTP (rapide). On n'échoue pas pour des 'get' manquants.
+    local sftp_log_one="$backup_dir/.sftp_get_batch_$$.log"
+    if ! $sftp_cmd -b "$one_cmd" "$SSH_HOST" < /dev/null >"$sftp_log_one" 2>&1; then
+        # Déterminer si c'est une erreur réseau/SSH critique
+        if grep -E -q "(Connection|Permission denied|Could not resolve|No route to host|timed out)" "$sftp_log_one" 2>/dev/null; then
+            log_error "Echec sauvegarde (SFTP critique)"
+            tail -n 20 "$sftp_log_one" | sed 's/^/  /' || true
+            rm -f "$one_cmd" "$sftp_log_one"
+            exit 1
         fi
-    done
+        # Sinon, considérer comme non bloquant (fichiers absents)
+        log_warning "Sauvegarde partielle: certains fichiers n'ont pas été capturés"
+    fi
+    rm -f "$one_cmd"
+
+    # 5) Vérifier la présence locale. Avertir mais ne pas bloquer si absent.
+    local saved_count=0
+    local missing_count=0
+    while IFS= read -r file; do
+        [ -z "$file" ] && continue
+        if [ -f "$backup_dir/$file" ]; then
+            saved_count=$((saved_count+1))
+        else
+            log_warning "Sauvegarde manquante pour: $file"
+            missing_count=$((missing_count+1))
+        fi
+    done <<< "$files_list"
+    # En cas de manquants, affiche un extrait du log SFTP pour debug
+    if [ $missing_count -gt 0 ]; then
+        tail -n 20 "$sftp_log_one" 2>/dev/null | sed 's/^/  /' || true
+    fi
+    rm -f "$sftp_log_one" || true
     
     # Si erreurs, interrompre le déploiement
     if [ $failed -ne 0 ]; then
-        log_error "Sauvegarde incomplète: annulation du déploiement"
+        log_error "Sauvegarde: erreurs locales détectées"
         exit 1
     fi
 
     # Sauvegarder la liste des fichiers déployés (chemins relatifs)
     echo "$files_list" > "$backup_dir/deployed_files.txt" || { log_error "Impossible d'écrire deployed_files.txt"; exit 1; }
     
-    # Sauvegarder la configuration minimale utilisée
+    # Sauvegarder la configuration minimale utilisée + commit
     echo "LOCAL_ROOT=\"$LOCAL_ROOT\"" > "$backup_dir/deploy_config.txt" || { log_error "Impossible d'écrire deploy_config.txt"; exit 1; }
+    echo "COMMIT_REF=\"$commit_ref\"" >> "$backup_dir/deploy_config.txt" || { log_error "Impossible d'écrire commit dans deploy_config.txt"; exit 1; }
     
     # Rien à nettoyer: scripts temporaires déjà supprimés
     echo "$backup_dir"
@@ -291,20 +336,38 @@ deploy_commit() {
 
     # Récupérer listes AM (ajout/modif) et D (suppression) sur le commit ciblé uniquement
     local all_added_modified
-    all_added_modified=$(git diff-tree --no-commit-id --name-only --diff-filter=AM -r "$commit_hash")
+    all_added_modified=$(git -c core.quotepath=false diff-tree --no-commit-id --name-only --diff-filter=AM -r "$commit_hash")
     local all_deleted
-    all_deleted=$(git diff-tree --no-commit-id --name-only --diff-filter=D -r "$commit_hash")
+    all_deleted=$(git -c core.quotepath=false diff-tree --no-commit-id --name-only --diff-filter=D -r "$commit_hash")
 
     # Filtrer selon LOCAL_ROOT et calculer les chemins relatifs
     local files_am files_del
     files_am=$(filter_and_relativize_files "$all_added_modified")
     files_del=$(filter_and_relativize_files "$all_deleted")
 
-    # Construire la liste unique pour la sauvegarde (AM ∪ D)
-    local files_for_backup
-    files_for_backup=$(printf "%s\n%s\n" "$files_am" "$files_del" | sed '/^$/d' | awk '!seen[$0]++')
+    # Calculer le statut A/M relatif pour la sauvegarde/restore
+    local am_status_raw am_status_rel
+    am_status_raw=$(git -c core.quotepath=false diff-tree --no-commit-id --name-status --diff-filter=AM -r "$commit_hash")
+    am_status_rel=$(echo "$am_status_raw" | while IFS=$'\t' read -r status path; do
+        [ -z "$path" ] && continue
+        if [ -n "$LOCAL_ROOT" ]; then
+            if [[ "$path" == "$LOCAL_ROOT"/* ]]; then
+                echo -e "$status\t${path#$LOCAL_ROOT/}"
+            fi
+        else
+            echo -e "$status\t$path"
+        fi
+    done)
 
-    if [ -z "$files_for_backup" ]; then
+    # Extraire uniquement les M pour la sauvegarde
+    local files_am_only_m
+    files_am_only_m=$(echo "$am_status_rel" | awk -F "\t" '$1=="M" {print $2}' | sed '/^$/d' || true)
+
+    # Construire la liste unique pour la sauvegarde (M ∪ D)
+    local files_for_backup
+    files_for_backup=$(printf "%s\n%s\n" "$files_am_only_m" "$files_del" | sed '/^$/d' | awk '!seen[$0]++')
+
+    if [ -z "$files_am" ] && [ -z "$files_del" ]; then
         if [ -n "$LOCAL_ROOT" ]; then
             log_warning "Aucun changement à traiter dans $LOCAL_ROOT pour ce commit"
         else
@@ -330,7 +393,15 @@ deploy_commit() {
     # Créer la sauvegarde avant action (inclut A/M et D)
     log_info "Backup: liste des fichiers à sauvegarder:"; echo "$files_for_backup"
     local backup_dir
-    backup_dir=$(create_backup "$commit_hash" "$files_for_backup")
+    # Ne récupérer que la dernière ligne (chemin), laisser les logs à l'écran
+    backup_dir=$(create_backup "$commit_hash" "$files_for_backup" | tail -n1)
+
+    # Sauver aussi le status A/M pour une restauration plus précise
+    echo "$am_status_rel" > "$backup_dir/am_status.txt" || { log_error "Impossible d'écrire am_status.txt"; exit 1; }
+    # Remplacer deployed_files.txt par la liste complète (AM ∪ D)
+    local deployed_all
+    deployed_all=$(printf "%s\n%s\n" "$files_am" "$files_del" | sed '/^$/d' | awk '!seen[$0]++')
+    echo "$deployed_all" > "$backup_dir/deployed_files.txt" || { log_error "Impossible d'écrire deployed_files.txt"; exit 1; }
     log_success "Sauvegarde créée: $backup_dir"
     
     # Créer un dossier temporaire pour exporter les fichiers
@@ -365,40 +436,75 @@ deploy_commit() {
     
     log_info "Upload vers SFTP..."
     
+    # Pré-créer les dossiers distants requis via SSH (mkdir -p)
+    local ssh_cmd=$(build_ssh_command "ssh")
+    # Vérifier que le répertoire distant existe
+    if ! $ssh_cmd "test -d \"$REMOTE_PATH\""; then
+        log_error "Répertoire distant introuvable: $REMOTE_PATH"
+        exit 1
+    fi
+    if [ -n "$files_am" ]; then
+        while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            local d
+            d=$(dirname "$f")
+            [ "$d" = "." ] && continue
+            $ssh_cmd "mkdir -p \"$REMOTE_PATH/$d\"" || true
+        done <<< "$files_am"
+    fi
+
     # Créer le script SFTP pour l'upload
     local sftp_script="$temp_dir/upload_commands.txt"
     echo "cd $REMOTE_PATH" > "$sftp_script"
+    echo "lcd $temp_dir" >> "$sftp_script"
     
     while IFS= read -r file; do
         [ -z "$file" ] && continue
         
         if [ -f "$temp_dir/$file" ]; then
-            # Créer le répertoire distant si nécessaire (géré par wrapper sftp)
-            if [ "$(dirname "$file")" != "." ]; then
-                echo "mkdir -p $(dirname "$file")" >> "$sftp_script"
-            fi
-            echo "put -p $temp_dir/$file $file" >> "$sftp_script"
+            echo "put -p \"$file\" \"$file\"" >> "$sftp_script"
         fi
     done <<< "$files_am"
 
     # Ajouter les suppressions (uniquement celles du commit)
+    # Pas de vérification préalable (trop coûteuse). On tolère les 'No such file' ensuite.
     while IFS= read -r dfile; do
         [ -z "$dfile" ] && continue
-        echo "rm $dfile" >> "$sftp_script"
+        echo "rm \"$dfile\"" >> "$sftp_script"
     done <<< "$files_del"
     
     echo "quit" >> "$sftp_script"
     
-    # Exécuter SFTP
+    # Exécuter SFTP (capture des erreurs pour diagnostic)
     local sftp_cmd=$(build_ssh_command "sftp")
-    if $sftp_cmd -b "$sftp_script" >/dev/null; then
+    local sftp_log="$temp_dir/sftp_upload.log"
+    if $sftp_cmd -b "$sftp_script" "$SSH_HOST" < /dev/null >"$sftp_log" 2>&1; then
         log_success "Déploiement terminé avec succès!"
         log_info "Sauvegarde disponible dans: $backup_dir"
     else
-        log_error "Erreur lors du déploiement SFTP"
-        rm -rf "$temp_dir"
-        exit 1
+        # Tolérer les erreurs de type "No such file or directory" (rm sur fichiers absents)
+        if grep -E -q "No such file or directory" "$sftp_log" && \
+           ! grep -E -q "(Permission denied|Failure|Connection|timed out|Couldn't|cannot|not found|denied)" "$sftp_log"; then
+            log_warning "Déploiement: quelques suppressions étaient déjà absentes (ignoré)"
+            log_success "Déploiement terminé avec succès!"
+            log_info "Sauvegarde disponible dans: $backup_dir"
+        else
+            log_error "Erreur lors du déploiement SFTP"
+            tail -n 20 "$sftp_log" | sed 's/^/  /' || true
+            rm -rf "$temp_dir"
+            exit 1
+        fi
     fi
+
+    # Résumé final
+    local count_am count_del count_rm_absent
+    count_am=$(printf '%s\n' "$files_am" | sed '/^$/d' | wc -l | tr -d ' ')
+    count_del=$(printf '%s\n' "$files_del" | sed '/^$/d' | wc -l | tr -d ' ')
+    count_rm_absent=$(grep -Ec "No such file or directory" "$sftp_log" 2>/dev/null || echo 0)
+    log_info "Résumé: envoyés A/M=$count_am, suppressions D=$count_del, absents ignorés=$count_rm_absent"
+    # Afficher la commande de restauration utile
+    local deploy_cmd_restore="$0 restore $backup_dir ${config_file:-$DEFAULT_CONFIG}"
+    log_info "Restauration: $deploy_cmd_restore"
     
     # Nettoyer
     rm -rf "$temp_dir"
@@ -508,7 +614,30 @@ restore_backup() {
     fi
     
     local deployed_files=$(cat "$deployed_files_list")
+    # Lire le statut A/M si disponible
+    local am_status_file="$backup_dir/am_status.txt"
+    declare -A AM_KIND
+    if [ -f "$am_status_file" ]; then
+        while IFS=$'\t' read -r kind path; do
+            [ -z "$path" ] && continue
+            AM_KIND["$path"]="$kind"
+        done < "$am_status_file"
+    fi
     
+    # Pré-créer les dossiers distants requis via SSH (mkdir -p) pour les fichiers à restaurer
+    local ssh_cmd=$(build_ssh_command "ssh")
+    if [ -n "$deployed_files" ]; then
+        while IFS= read -r file; do
+            [ -z "$file" ] && continue
+            if [ -f "$backup_dir/$file" ]; then
+                local d
+                d=$(dirname "$file")
+                [ "$d" = "." ] && continue
+                $ssh_cmd "mkdir -p \"$REMOTE_PATH/$d\"" || true
+            fi
+        done <<< "$deployed_files"
+    fi
+
     # Créer le script SFTP pour la restauration
     local temp_dir=$(mktemp -d)
     local sftp_script="$temp_dir/restore_commands.txt"
@@ -520,30 +649,41 @@ restore_backup() {
         
         if [ -f "$backup_dir/$file" ]; then
             log_info "Restauration: $file"
-            # Créer le répertoire distant si nécessaire
-            if [ "$(dirname "$file")" != "." ]; then
-                echo "mkdir -p $(dirname "$file")" >> "$sftp_script"
-            fi
-            echo "put -p $backup_dir/$file $file" >> "$sftp_script"
+            echo "put -p \"$backup_dir/$file\" \"$file\"" >> "$sftp_script"
         else
-            # Le fichier n'existait pas avant le déploiement, le supprimer
-            log_info "Suppression: $file (fichier ajouté lors du déploiement)"
-            echo "rm $file" >> "$sftp_script"
+            # Aucun rebuild depuis Git: restauration strictement depuis le backup
+            if [ "${AM_KIND[$file]:-}" = "A" ]; then
+                log_info "Suppression: $file (ajouté, pas de sauvegarde)"
+                echo "rm \"$file\"" >> "$sftp_script"
+            else
+                log_error "Backup manquant pour: $file — restauration impossible (strict)"
+                rm -rf "$temp_dir"
+                exit 1
+            fi
         fi
     done <<< "$deployed_files"
     
     echo "quit" >> "$sftp_script"
     
-    # Exécuter SFTP
+    # Exécuter SFTP (capture d'erreurs)
     local sftp_cmd=$(build_ssh_command "sftp")
-    if $sftp_cmd -b "$sftp_script" >/dev/null; then
+    local sftp_log="$temp_dir/sftp_restore.log"
+    if $sftp_cmd -b "$sftp_script" "$SSH_HOST" < /dev/null >"$sftp_log" 2>&1; then
         log_success "Restauration terminée avec succès!"
     else
         log_error "Erreur lors de la restauration"
+        tail -n 20 "$sftp_log" | sed 's/^/  /' || true
         rm -rf "$temp_dir"
         exit 1
     fi
     
+    # Résumé restauration
+    local count_put count_rm count_rm_absent
+    count_put=$(while IFS= read -r f; do [ -z "$f" ] && continue; [ -f "$backup_dir/$f" ] && echo x; done <<< "$deployed_files" | wc -l | tr -d ' ')
+    count_rm=$(while IFS= read -r f; do [ -z "$f" ] && continue; [ ! -f "$backup_dir/$f" ] && echo x; done <<< "$deployed_files" | wc -l | tr -d ' ')
+    count_rm_absent=$(grep -Ec "No such file or directory" "$sftp_log" 2>/dev/null || echo 0)
+    log_info "Résumé restauration: remis=$count_put, supprimés=$count_rm, absents ignorés=$count_rm_absent"
+
     # Nettoyer
     rm -rf "$temp_dir"
 }
