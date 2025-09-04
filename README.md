@@ -27,6 +27,10 @@ src/git-sftp-deploy.sh deploy <commit-ish> [chemin/config]
 
 # Déployer le dernier commit
 src/git-sftp-deploy.sh deploy HEAD
+
+# Par défaut, si [chemin/config] est omis, ./deploy.conf (CWD) est utilisé
+src/git-sftp-deploy.sh deploy HEAD             # utilise ./deploy.conf si présent
+src/git-sftp-deploy.sh deploy HEAD ./prod.conf # config explicite
 ```
 
 Notes:
@@ -38,6 +42,11 @@ Notes:
 ```bash
 # Restaurer depuis une sauvegarde
 src/git-sftp-deploy.sh restore [save-deploy/<sha-commit>/<timestamp>] [chemin/config]
+
+# Si [chemin/config] est omis, ./deploy.conf (CWD) est utilisé
+# Le répertoire de sauvegarde relatif est résolu en priorité dans:
+#   1) ./save-deploy (CWD)
+#   2) <dossier de la config chargée>/save-deploy
 
 # Lister toutes les sauvegardes disponibles
 src/git-sftp-deploy.sh list
@@ -173,10 +182,14 @@ which git-sftp-deploy && git-sftp-deploy --help
 
 ```bash
 # Utilisation dans n'importe quel projet (depuis la racine du repo)
-# 1) Initialiser la config
+# 1) Initialiser la config (par défaut: crée ./deploy.conf)
+git-sftp-deploy init
+# ou
 git-sftp-deploy init ./deploy.conf
 
 # 2) Déployer le dernier commit
+git-sftp-deploy deploy HEAD         # utilisera ./deploy.conf
+# ou
 git-sftp-deploy deploy HEAD ./deploy.conf
 ```
 

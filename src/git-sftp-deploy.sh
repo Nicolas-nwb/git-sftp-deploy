@@ -6,7 +6,9 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DEFAULT_CONFIG="$SCRIPT_DIR/deploy.conf"
+DEFAULT_CONFIG_BASENAME="deploy.conf"
+# Stocke le chemin de config effectivement utilisé (défini par load_config)
+CONFIG_FILE_PATH=""
 # Dossier de sauvegarde local (dans le répertoire courant d'exécution)
 SAVE_DIR="$PWD/save-deploy"
 
@@ -53,6 +55,7 @@ CONFIGURATION:
   - SSH_HOST: nom de la config SSH (définie dans ~/.ssh/config)
   - REMOTE_PATH: répertoire de destination sur le serveur
   - LOCAL_ROOT: racine locale pour calculer les chemins relatifs (optionnel)
+  - Par défaut, si [config] est omis, $PWD/deploy.conf est utilisé
   
   Exemple avec LOCAL_ROOT="src/web":
   - Commit modifie: src/web/index.html, src/web/css/style.css, README.md
@@ -70,9 +73,10 @@ SAUVEGARDES:
 EXEMPLES:
   $0 init                      # Crée deploy.conf
   $0 init prod.conf            # Crée prod.conf
-  $0 deploy HEAD               # Déploie le dernier commit
-  $0 deploy abc123             # Déploie le commit abc123
-  $0 restore                   # Sélecteur interactif de sauvegarde
+  $0 deploy HEAD               # Déploie le dernier commit (utilise ./deploy.conf si présent)
+  $0 deploy abc123             # Déploie le commit abc123 (utilise ./deploy.conf si présent)
+  $0 deploy HEAD ./prod.conf   # Déploie en utilisant un fichier de config explicite
+  $0 restore                   # Sélecteur interactif de sauvegarde (config par défaut: ./deploy.conf)
   $0 restore save-deploy/<sha-commit>/2024-01-15_14-30-25  # Restaure une sauvegarde spécifique (alias HEAD disponible)
 
 OPTIONS:
@@ -82,7 +86,7 @@ EOF
 
 # Initialiser un fichier de configuration template
 init_config() {
-    local config_file="${1:-$DEFAULT_CONFIG}"
+    local config_file="${1:-$PWD/$DEFAULT_CONFIG_BASENAME}"
     
     if [ -f "$config_file" ]; then
         log_warning "Le fichier $config_file existe déjà"
@@ -127,7 +131,13 @@ EOF
 
 # Charger la configuration
 load_config() {
-    local config_file="${1:-$DEFAULT_CONFIG}"
+    local input_config="${1:-}"
+    local config_file
+    if [ -n "$input_config" ]; then
+        config_file="$input_config"
+    else
+        config_file="$PWD/$DEFAULT_CONFIG_BASENAME"
+    fi
     
     if [ ! -f "$config_file" ]; then
         log_error "Fichier de configuration non trouvé: $config_file"
@@ -135,6 +145,7 @@ load_config() {
         exit 1
     fi
     
+    CONFIG_FILE_PATH="$config_file"
     source "$config_file"
     
     if [ -z "$SSH_HOST" ] || [ -z "$REMOTE_PATH" ]; then
@@ -528,7 +539,12 @@ deploy_commit() {
     count_rm_absent=$(grep -Ec "No such file or directory" "$sftp_log" 2>/dev/null || echo 0)
     log_info "Résumé: envoyés A/M=$count_am, suppressions D=$count_del, absents ignorés=$count_rm_absent"
     # Afficher la commande de restauration utile
-    local deploy_cmd_restore="$0 restore $backup_dir ${config_file:-$DEFAULT_CONFIG}"
+    local deploy_cmd_restore
+    if [ -n "$config_file" ]; then
+        deploy_cmd_restore="$0 restore $backup_dir $config_file"
+    else
+        deploy_cmd_restore="$0 restore $backup_dir"
+    fi
     log_info "Restauration: $deploy_cmd_restore"
     
     # Nettoyer
@@ -590,6 +606,9 @@ restore_backup() {
     local backup_dir="$1"
     local config_file="$2"
     
+    # Charger la configuration (détecte ./deploy.conf si omis)
+    load_config "$config_file"
+
     # Si aucune sauvegarde spécifiée, utiliser le sélecteur
     if [ -z "$backup_dir" ]; then
         backup_dir=$(select_backup)
@@ -597,13 +616,17 @@ restore_backup() {
     
     # Résolution du chemin de sauvegarde
     if [[ ! "$backup_dir" =~ ^/ ]]; then
-        # 1) Preferer SAVE_DIR courant
+        # 1) Préférer SAVE_DIR courant
         if [ -d "$SAVE_DIR/$backup_dir" ]; then
             backup_dir="$SAVE_DIR/$backup_dir"
         else
-            # 2) Sinon, utiliser le dossier de la config (repo) + save-deploy
+            # 2) Sinon, utiliser le dossier de la config effectivement chargée + save-deploy
             local conf_dir
-            conf_dir=$(cd "$(dirname "$config_file")" && pwd)
+            if [ -n "$CONFIG_FILE_PATH" ]; then
+                conf_dir=$(cd "$(dirname "$CONFIG_FILE_PATH")" && pwd)
+            else
+                conf_dir="$PWD"
+            fi
             if [ -d "$conf_dir/save-deploy/$backup_dir" ]; then
                 backup_dir="$conf_dir/save-deploy/$backup_dir"
             else
@@ -616,8 +639,6 @@ restore_backup() {
         log_error "Répertoire de sauvegarde non trouvé: $backup_dir"
         exit 1
     fi
-    
-    load_config "$config_file"
     
     log_info "Restauration depuis: $backup_dir"
     
