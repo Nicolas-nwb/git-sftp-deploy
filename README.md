@@ -37,13 +37,14 @@ Notes:
 #### 🔄 Restauration
 ```bash
 # Restaurer depuis une sauvegarde
-src/git-sftp-deploy.sh restore [save-deploy/<commit>/<timestamp>] [chemin/config]
+src/git-sftp-deploy.sh restore [save-deploy/<sha-commit>/<timestamp>] [chemin/config]
 
 # Lister toutes les sauvegardes disponibles
 src/git-sftp-deploy.sh list
 ```
 
 Note: en fin de déploiement, la commande exacte de restauration est affichée pour faciliter un rollback immédiat.
+Astuce: un alias `save-deploy/HEAD` pointe vers le dossier du commit HEAD résolu (SHA).
 
 #### 🔐 Restauration stricte (garanties)
 - Aucune restauration depuis Git: seules les données présentes dans le dossier de sauvegarde sont utilisées.
@@ -97,6 +98,7 @@ LOCAL_ROOT=""                   # Racine locale (vide/"." = dossier courant)
 - Un fichier `.gitignore` est généré dans `save-deploy/` pour éviter toute synchro Git.
 - Le déploiement est annulé si la sauvegarde échoue (droits/SSH, etc.).
 - Contenu: la sauvegarde contient les fichiers nécessaires à la restauration de l’état précédent (modifiés et supprimés), ainsi qu’un `am_status.txt` (A/M du commit) et la liste `deployed_files.txt`.
+- Organisation: les sauvegardes sont regroupées par SHA du commit: `save-deploy/<sha-commit>/<timestamp>/`. Un alias `save-deploy/HEAD` pointe vers `save-deploy/<sha-commit>/` du HEAD courant.
 
 ## 🗑️ Synchronisation des suppressions (D)
 
@@ -117,7 +119,8 @@ git-sftp-deploy deploy HEAD ./deploy.conf   # a.txt est SUPPRIMÉ côté serveur
 
 # Restauration
 # (ré-upload de a.txt depuis la sauvegarde)
-git-sftp-deploy restore save-deploy/HEAD/<timestamp> ./deploy.conf
+git-sftp-deploy restore save-deploy/<sha-commit>/<timestamp> ./deploy.conf
+# (ou via l'alias) : git-sftp-deploy restore save-deploy/HEAD/<timestamp> ./deploy.conf
 ```
 
 ## 🧪 Tests

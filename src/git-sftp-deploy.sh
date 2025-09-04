@@ -23,6 +23,20 @@ log_success() { echo -e "${GREEN}✅${NC} $1"; }
 log_warning() { echo -e "${YELLOW}⚠${NC} $1"; }
 log_error() { echo -e "${RED}❌${NC} $1"; }
 
+# Résoudre une référence Git (HEAD/branche/tag/sha) en SHA complet
+resolve_commit_ref() {
+    local ref="$1"
+    if [ -z "$ref" ]; then
+        log_error "Référence git manquante"
+        exit 1
+    fi
+    if ! git rev-parse --verify "$ref^{commit}" >/dev/null 2>&1; then
+        log_error "Référence git invalide: $ref"
+        exit 1
+    fi
+    git rev-parse "$ref^{commit}"
+}
+
 # Afficher l'aide
 show_help() {
     cat << EOF
@@ -59,7 +73,7 @@ EXEMPLES:
   $0 deploy HEAD               # Déploie le dernier commit
   $0 deploy abc123             # Déploie le commit abc123
   $0 restore                   # Sélecteur interactif de sauvegarde
-  $0 restore save-deploy/HEAD/2024-01-15_14-30-25  # Restaure une sauvegarde spécifique
+  $0 restore save-deploy/<sha-commit>/2024-01-15_14-30-25  # Restaure une sauvegarde spécifique (alias HEAD disponible)
 
 OPTIONS:
   -h, --help                   Affiche cette aide
@@ -321,14 +335,19 @@ create_backup() {
 
 # Déployer un commit avec sauvegarde
 deploy_commit() {
-    local commit_hash="$1"
+    local commit_input="$1"
     local config_file="$2"
     
-    if [ -z "$commit_hash" ]; then
-        log_error "Hash de commit requis"
+    if [ -z "$commit_input" ]; then
+        log_error "Référence de commit requise"
         show_help
         exit 1
     fi
+    
+    # Résoudre la référence en SHA canonique
+    local commit_hash
+    commit_hash=$(resolve_commit_ref "$commit_input") || { log_error "Impossible de résoudre le commit"; exit 1; }
+    log_info "Commit résolu: '$commit_input' -> $commit_hash"
     
     load_config "$config_file"
     
@@ -395,6 +414,12 @@ deploy_commit() {
     local backup_dir
     # Ne récupérer que la dernière ligne (chemin), laisser les logs à l'écran
     backup_dir=$(create_backup "$commit_hash" "$files_for_backup" | tail -n1)
+
+    # Alias HEAD -> SHA (compatibilité et déduplication)
+    if [ "$commit_input" = "HEAD" ]; then
+        mkdir -p "$SAVE_DIR" || { log_error "Impossible de préparer $SAVE_DIR"; exit 1; }
+        ln -sfn "$SAVE_DIR/$commit_hash" "$SAVE_DIR/HEAD" || true
+    fi
 
     # Sauver aussi le status A/M pour une restauration plus précise
     echo "$am_status_rel" > "$backup_dir/am_status.txt" || { log_error "Impossible d'écrire am_status.txt"; exit 1; }
