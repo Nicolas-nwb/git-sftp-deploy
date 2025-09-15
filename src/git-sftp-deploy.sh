@@ -9,8 +9,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEFAULT_CONFIG_BASENAME="deploy.conf"
 # Stocke le chemin de config effectivement utilisé (défini par load_config)
 CONFIG_FILE_PATH=""
+# Répertoire courant d'exécution (résolu physiquement)
+CWD="$(pwd -P)"
 # Dossier de sauvegarde local (dans le répertoire courant d'exécution)
-SAVE_DIR="$PWD/save-deploy"
+SAVE_DIR="$CWD/save-deploy"
 
 # Couleurs pour l'affichage
 RED='\033[0;31m'
@@ -55,7 +57,7 @@ CONFIGURATION:
   - SSH_HOST: nom de la config SSH (définie dans ~/.ssh/config)
   - REMOTE_PATH: répertoire de destination sur le serveur
   - LOCAL_ROOT: racine locale pour calculer les chemins relatifs (optionnel)
-  - Par défaut, si [config] est omis, $PWD/deploy.conf est utilisé
+  - Par défaut, si [config] est omis, ./deploy.conf est utilisé
   
   Exemple avec LOCAL_ROOT="src/web":
   - Commit modifie: src/web/index.html, src/web/css/style.css, README.md
@@ -86,7 +88,8 @@ EOF
 
 # Initialiser un fichier de configuration template
 init_config() {
-    local config_file="${1:-$PWD/$DEFAULT_CONFIG_BASENAME}"
+    # Toujours créer dans le répertoire d'exécution courant si non spécifié
+    local config_file="${1:-$CWD/$DEFAULT_CONFIG_BASENAME}"
     
     if [ -f "$config_file" ]; then
         log_warning "Le fichier $config_file existe déjà"
@@ -136,7 +139,8 @@ load_config() {
     if [ -n "$input_config" ]; then
         config_file="$input_config"
     else
-        config_file="$PWD/$DEFAULT_CONFIG_BASENAME"
+        # Par défaut, utiliser la config dans le CWD
+        config_file="$CWD/$DEFAULT_CONFIG_BASENAME"
     fi
     
     if [ ! -f "$config_file" ]; then
@@ -625,7 +629,7 @@ restore_backup() {
             if [ -n "$CONFIG_FILE_PATH" ]; then
                 conf_dir=$(cd "$(dirname "$CONFIG_FILE_PATH")" && pwd)
             else
-                conf_dir="$PWD"
+                conf_dir="$CWD"
             fi
             if [ -d "$conf_dir/save-deploy/$backup_dir" ]; then
                 backup_dir="$conf_dir/save-deploy/$backup_dir"
