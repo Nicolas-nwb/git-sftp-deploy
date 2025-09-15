@@ -180,6 +180,23 @@ sudo install -m 0755 ./src/git-sftp-deploy.sh /usr/local/bin/git-sftp-deploy
 which git-sftp-deploy && git-sftp-deploy --help
 ```
 
+### Installation directe depuis GitHub (sans cloner)
+
+```bash
+# macOS/Linux avec curl
+sudo curl -fsSL -o /usr/local/bin/git-sftp-deploy \
+  https://raw.githubusercontent.com/Nicolas-nwb/git-sftp-deploy/main/src/git-sftp-deploy.sh && \
+  sudo chmod 0755 /usr/local/bin/git-sftp-deploy
+
+# Alternative avec wget
+sudo wget -qO /usr/local/bin/git-sftp-deploy \
+  https://raw.githubusercontent.com/Nicolas-nwb/git-sftp-deploy/main/src/git-sftp-deploy.sh && \
+  sudo chmod 0755 /usr/local/bin/git-sftp-deploy
+
+# Vérification
+which git-sftp-deploy && git-sftp-deploy --help
+```
+
 ```bash
 # Utilisation dans n'importe quel projet (depuis la racine du repo)
 # 1) Initialiser la config (par défaut: crée ./deploy.conf)
