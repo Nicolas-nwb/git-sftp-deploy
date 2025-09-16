@@ -233,7 +233,65 @@ load_config() {
     fi
     
     CONFIG_FILE_PATH="$config_file"
-    source "$config_file"
+    local config_to_source="$config_file"
+    local sanitized_tmp=""
+    local bom_prefix
+    bom_prefix=$(LC_ALL=C head -c 3 "$config_file" 2>/dev/null || true)
+    local has_bom=0
+    if [ "$bom_prefix" = $'\357\273\277' ]; then
+        has_bom=1
+    fi
+    local has_cr=0
+    if LC_ALL=C grep -q $'\r' "$config_file"; then
+        has_cr=1
+    fi
+
+    if [ $has_bom -eq 1 ] || [ $has_cr -eq 1 ]; then
+        sanitized_tmp=$(mktemp) || { log_error "Impossible de préparer un fichier temporaire"; exit 1; }
+        if [ $has_bom -eq 1 ]; then
+            if ! tail -c +4 "$config_file" > "$sanitized_tmp"; then
+                log_error "Nettoyage BOM impossible dans $config_file"
+                rm -f "$sanitized_tmp"
+                exit 1
+            fi
+            log_warning "BOM détecté dans $config_file. Conversion temporaire appliquée"
+        else
+            if ! cat "$config_file" > "$sanitized_tmp"; then
+                log_error "Lecture impossible de $config_file"
+                rm -f "$sanitized_tmp"
+                exit 1
+            fi
+        fi
+
+        if [ $has_cr -eq 1 ]; then
+            local sanitized_no_cr
+            sanitized_no_cr=$(mktemp) || { log_error "Impossible de préparer un fichier temporaire"; rm -f "$sanitized_tmp"; exit 1; }
+            if ! tr -d '\r' < "$sanitized_tmp" > "$sanitized_no_cr"; then
+                log_error "Conversion CRLF impossible pour $config_file"
+                rm -f "$sanitized_tmp" "$sanitized_no_cr"
+                exit 1
+            fi
+            mv "$sanitized_no_cr" "$sanitized_tmp" || { log_error "Nettoyage CRLF impossible pour $config_file"; rm -f "$sanitized_tmp" "$sanitized_no_cr"; exit 1; }
+            log_warning "Fins de ligne Windows détectées dans $config_file. Conversion temporaire appliquée"
+        fi
+
+        config_to_source="$sanitized_tmp"
+    fi
+
+    set +e
+    # shellcheck disable=SC1090
+    source "$config_to_source"
+    local source_rc=$?
+    set -e
+
+    if [ -n "$sanitized_tmp" ]; then
+        rm -f "$sanitized_tmp" || true
+    fi
+
+    if [ $source_rc -ne 0 ]; then
+        log_error "Configuration invalide: $config_file"
+        exit 1
+    fi
     
     if [ -z "$SSH_HOST" ] || [ -z "$REMOTE_PATH" ]; then
         log_error "Configuration incomplète. SSH_HOST et REMOTE_PATH sont requis"
