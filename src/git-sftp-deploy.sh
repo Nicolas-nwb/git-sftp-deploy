@@ -395,35 +395,36 @@ get_full_file_path() {
 # Calcule la liste ordonnée des dossiers à créer côté distant
 collect_remote_directories() {
     local files_list="$1"
-    declare -A seen_dirs=()
-    local -a ordered_dirs=()
+    local seen=""
+    local result=""
 
     while IFS= read -r path; do
         [ -z "$path" ] && continue
-        local -a parts=()
         local IFS='/'
-        read -ra parts <<< "$path"
+        local -a parts=()
+        read -r -a parts <<< "$path"
         local depth=${#parts[@]}
-        if [ $depth -le 1 ]; then
+        if [ "$depth" -le 1 ]; then
             continue
         fi
 
         local partial=""
         local limit=$((depth-1))
+        local i
         for ((i=0; i<limit; i++)); do
             if [ -z "$partial" ]; then
                 partial="${parts[i]}"
             else
                 partial="$partial/${parts[i]}"
             fi
-            if [ -z "${seen_dirs[$partial]:-}" ]; then
-                ordered_dirs+=("$partial")
-                seen_dirs["$partial"]=1
+            if ! printf '%s\n' "$seen" | grep -Fxq "$partial"; then
+                result+="$partial\n"
+                seen+="$partial\n"
             fi
         done
     done <<< "$files_list"
 
-    printf '%s\n' "${ordered_dirs[@]}"
+    printf '%b' "$result"
 }
 
 # Vérifie via SFTP que le répertoire distant est accessible
@@ -696,12 +697,12 @@ deploy_commit() {
     if [ -n "$files_am" ]; then
         mkdir_targets=$(collect_remote_directories "$files_am")
         if [ -n "$mkdir_targets" ]; then
-        local dir
-        while IFS= read -r dir; do
-            [ -z "$dir" ] && continue
-            echo "-mkdir \"$dir\"" >> "$sftp_script"
-        done <<< "$mkdir_targets"
-    fi
+            local dir
+            while IFS= read -r dir; do
+                [ -z "$dir" ] && continue
+                echo "-mkdir \"$dir\"" >> "$sftp_script"
+            done <<< "$mkdir_targets"
+        fi
     fi
     
     while IFS= read -r file; do
@@ -882,13 +883,6 @@ restore_backup() {
     local deployed_files=$(cat "$deployed_files_list")
     # Lire le statut A/M si disponible
     local am_status_file="$backup_dir/am_status.txt"
-    typeset -A AM_KIND
-    if [ -f "$am_status_file" ]; then
-        while IFS=$'\t' read -r kind path; do
-            [ -z "$path" ] && continue
-            AM_KIND["$path"]="$kind"
-        done < "$am_status_file"
-    fi
     
     # Créer le script SFTP pour la restauration
     local temp_dir=$(mktemp -d)
@@ -909,11 +903,11 @@ restore_backup() {
     if [ -n "$restore_files" ]; then
         restore_dirs=$(collect_remote_directories "$restore_files")
         if [ -n "$restore_dirs" ]; then
-        local dir
-        while IFS= read -r dir; do
-            [ -z "$dir" ] && continue
-            echo "-mkdir \"$dir\"" >> "$sftp_script"
-        done <<< "$restore_dirs"
+            local dir
+            while IFS= read -r dir; do
+                [ -z "$dir" ] && continue
+                echo "-mkdir \"$dir\"" >> "$sftp_script"
+            done <<< "$restore_dirs"
         fi
     fi
     
@@ -926,7 +920,11 @@ restore_backup() {
             echo "put -p \"$backup_dir/$file\" \"$file\"" >> "$sftp_script"
         else
             # Aucun rebuild depuis Git: restauration strictement depuis le backup
-            if [ "${AM_KIND[$file]:-}" = "A" ]; then
+            local am_kind=""
+            if [ -f "$am_status_file" ]; then
+                am_kind=$(awk -F $'\t' -v target="$file" '$2==target {print $1; exit}' "$am_status_file" 2>/dev/null || true)
+            fi
+            if [ "$am_kind" = "A" ]; then
                 log_info "Suppression: $file (ajouté, pas de sauvegarde)"
                 echo "rm \"$file\"" >> "$sftp_script"
             else
