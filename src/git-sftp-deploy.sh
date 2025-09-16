@@ -35,9 +35,12 @@ check_prerequisites() {
 
     case "$context" in
         deploy|restore)
-            required=("git" "ssh" "sftp")
+            required=("git" "ssh" "sftp" "mktemp" "awk" "sed" "grep" "tail" "find" "wc" "date" "dirname" "cat" "chmod" "mkdir" "ln")
             ;;
-        list|init|-h|--help|help|"")
+        list)
+            required=("find")
+            ;;
+        init)
             return 0
             ;;
         *)
@@ -50,47 +53,59 @@ check_prerequisites() {
     local -a missing=()
     local cmd
     for cmd in "${required[@]}"; do
-        if ! command -v "$cmd" >/dev/null 2>&1; then
-            missing+=("$cmd")
-        fi
+        command -v "$cmd" >/dev/null 2>&1 || missing+=("$cmd")
     done
 
-    [ ${#missing[@]} -gt 0 ] || return 0
+    [ ${#missing[@]} -eq 0 ] && return 0
 
     log_error "Prérequis manquants détectés: ${missing[*]}"
-    log_info "Installez les dépendances suivantes via Homebrew :"
 
-    local brew_tips=""
+    if ! command -v brew >/dev/null 2>&1; then
+        log_warning "Homebrew introuvable. Installez-le d'abord via https://brew.sh"
+        exit 1
+    fi
+
+    log_info "Commandes Homebrew suggérées :"
+    local tips=""
+    local tip
+
     for cmd in "${missing[@]}"; do
         case "$cmd" in
             git)
-                if [[ "$brew_tips" != *"brew install git"* ]]; then
-                    brew_tips="${brew_tips}
-  brew install git"
-                fi
+                tip="brew install git"
                 ;;
             ssh|sftp)
-                if [[ "$brew_tips" != *"brew install openssh"* ]]; then
-                    brew_tips="${brew_tips}
-  brew install openssh"
-                fi
+                tip="brew install openssh"
+                ;;
+            mktemp|tail|wc|date|dirname|cat|chmod|mkdir|ln)
+                tip="brew install coreutils"
+                ;;
+            awk)
+                tip="brew install gawk"
+                ;;
+            sed)
+                tip="brew install gnu-sed"
+                ;;
+            grep)
+                tip="brew install grep"
+                ;;
+            find)
+                tip="brew install findutils"
                 ;;
             *)
-                local formula="brew install $cmd"
-                if [[ "$brew_tips" != *"$formula"* ]]; then
-                    brew_tips="${brew_tips}
-  $formula"
-                fi
+                tip="brew search $cmd"
                 ;;
         esac
+        if ! grep -qxF "$tip" <<< "$tips"; then
+            tips="$tips
+$tip"
+        fi
     done
 
-    if [ -n "$brew_tips" ]; then
-        while IFS= read -r line; do
-            [ -z "$line" ] && continue
-            log_info "$line"
-        done <<< "$brew_tips"
-    fi
+    while IFS= read -r tip; do
+        [ -z "$tip" ] && continue
+        log_info "  $tip"
+    done <<< "$tips"
 
     exit 1
 }
@@ -827,6 +842,7 @@ case "${1:-}" in
         restore_backup "$2" "$3"
         ;;
     "list")
+        check_prerequisites "list"
         list_backups "$2"
         ;;
     "-h"|"--help"|"help")
