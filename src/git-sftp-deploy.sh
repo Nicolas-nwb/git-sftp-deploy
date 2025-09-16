@@ -696,11 +696,12 @@ deploy_commit() {
     if [ -n "$files_am" ]; then
         mkdir_targets=$(collect_remote_directories "$files_am")
         if [ -n "$mkdir_targets" ]; then
-            while IFS= read -r dir; do
-                [ -z "$dir" ] && continue
-                echo "-mkdir \"$dir\"" >> "$sftp_script"
-            done <<< "$mkdir_targets"
-        fi
+        local dir
+        while IFS= read -r dir; do
+            [ -z "$dir" ] && continue
+            echo "-mkdir \"$dir\"" >> "$sftp_script"
+        done <<< "$mkdir_targets"
+    fi
     fi
     
     while IFS= read -r file; do
@@ -725,6 +726,7 @@ deploy_commit() {
     local sftp_log="$temp_dir/sftp_upload.log"
     if $sftp_cmd -b "$sftp_script" "$SSH_HOST" < /dev/null >"$sftp_log" 2>&1; then
         if [ -n "$mkdir_targets" ]; then
+            local dir
             while IFS= read -r dir; do
                 [ -z "$dir" ] && continue
                 assert_remote_directory "$REMOTE_PATH/$dir"
@@ -880,7 +882,7 @@ restore_backup() {
     local deployed_files=$(cat "$deployed_files_list")
     # Lire le statut A/M si disponible
     local am_status_file="$backup_dir/am_status.txt"
-    declare -A AM_KIND
+    typeset -A AM_KIND
     if [ -f "$am_status_file" ]; then
         while IFS=$'\t' read -r kind path; do
             [ -z "$path" ] && continue
@@ -907,10 +909,11 @@ restore_backup() {
     if [ -n "$restore_files" ]; then
         restore_dirs=$(collect_remote_directories "$restore_files")
         if [ -n "$restore_dirs" ]; then
-            while IFS= read -r dir; do
-                [ -z "$dir" ] && continue
-                echo "-mkdir \"$dir\"" >> "$sftp_script"
-            done <<< "$restore_dirs"
+        local dir
+        while IFS= read -r dir; do
+            [ -z "$dir" ] && continue
+            echo "-mkdir \"$dir\"" >> "$sftp_script"
+        done <<< "$restore_dirs"
         fi
     fi
     
@@ -941,6 +944,7 @@ restore_backup() {
     local sftp_log="$temp_dir/sftp_restore.log"
     if $sftp_cmd -b "$sftp_script" "$SSH_HOST" < /dev/null >"$sftp_log" 2>&1; then
         if [ -n "$restore_dirs" ]; then
+            local dir
             while IFS= read -r dir; do
                 [ -z "$dir" ] && continue
                 assert_remote_directory "$REMOTE_PATH/$dir"
