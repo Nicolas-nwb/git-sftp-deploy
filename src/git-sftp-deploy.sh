@@ -35,16 +35,16 @@ check_prerequisites() {
 
     case "$context" in
         deploy|restore)
-            required=("git" "ssh" "sftp" "mktemp" "awk" "sed" "grep" "tail" "find" "wc" "date" "dirname" "cat" "chmod" "mkdir" "ln")
+            required=("git" "sftp" "mktemp" "awk" "sed" "grep" "tail" "find" "sort" "wc" "date" "dirname" "cat" "chmod" "mkdir" "ln")
             ;;
         list)
-            required=("find")
+            required=("find" "sort")
             ;;
         init)
             return 0
             ;;
         *)
-            required=("git" "ssh" "sftp")
+            required=("git" "sftp")
             ;;
     esac
 
@@ -334,6 +334,76 @@ get_full_file_path() {
     fi
 }
 
+# Calcule la liste ordonnée des dossiers à créer côté distant
+collect_remote_directories() {
+    local files_list="$1"
+    declare -A seen_dirs=()
+    local -a ordered_dirs=()
+
+    while IFS= read -r path; do
+        [ -z "$path" ] && continue
+        local -a parts=()
+        local IFS='/'
+        read -ra parts <<< "$path"
+        local depth=${#parts[@]}
+        if [ $depth -le 1 ]; then
+            continue
+        fi
+
+        local partial=""
+        local limit=$((depth-1))
+        for ((i=0; i<limit; i++)); do
+            if [ -z "$partial" ]; then
+                partial="${parts[i]}"
+            else
+                partial="$partial/${parts[i]}"
+            fi
+            if [ -z "${seen_dirs[$partial]:-}" ]; then
+                ordered_dirs+=("$partial")
+                seen_dirs["$partial"]=1
+            fi
+        done
+    done <<< "$files_list"
+
+    printf '%s\n' "${ordered_dirs[@]}"
+}
+
+# Vérifie via SFTP que le répertoire distant est accessible
+assert_remote_directory() {
+    local remote_path="$1"
+    local sftp_cmd
+    sftp_cmd=$(build_ssh_command "sftp")
+    local probe_script
+    probe_script=$(mktemp)
+    local probe_log
+    probe_log=$(mktemp)
+
+    {
+        echo "cd $remote_path"
+        echo "pwd"
+        echo "quit"
+    } > "$probe_script"
+
+    if $sftp_cmd -b "$probe_script" "$SSH_HOST" < /dev/null >"$probe_log" 2>&1; then
+        rm -f "$probe_script" "$probe_log"
+        return 0
+    fi
+
+    local probe_output
+    probe_output=$(tail -n 20 "$probe_log" 2>/dev/null || true)
+    rm -f "$probe_script" "$probe_log"
+
+    if echo "$probe_output" | grep -qiE "(No such file|Couldn't canonicalize|does not exist)"; then
+        log_error "Répertoire distant introuvable: $remote_path"
+    else
+        log_error "Accès SFTP impossible sur: $remote_path"
+    fi
+    if [ -n "$probe_output" ]; then
+        echo "$probe_output" | sed 's/^/  /'
+    fi
+    exit 1
+}
+
 # Créer une sauvegarde des fichiers distants
 create_backup() {
     local commit_ref="$1"
@@ -350,13 +420,9 @@ create_backup() {
         echo -e "*\n!.gitignore\n" > "$SAVE_DIR/.gitignore" || { log_error "Impossible d'écrire $SAVE_DIR/.gitignore"; exit 1; }
     fi
     
-    # 1) Vérifier que le répertoire distant existe
-    local ssh_cmd=$(build_ssh_command "ssh")
+    # 1) Vérifier que le répertoire distant existe (SFTP-only friendly)
+    assert_remote_directory "$REMOTE_PATH"
     local sftp_cmd=$(build_ssh_command "sftp")
-    if ! $ssh_cmd "test -d \"$REMOTE_PATH\""; then
-        log_error "Répertoire distant introuvable: $REMOTE_PATH"
-        exit 1
-    fi
 
     # 2) Pré-créer tous les répertoires locaux requis
     while IFS= read -r file; do
@@ -450,6 +516,7 @@ deploy_commit() {
     log_info "Commit résolu: '$commit_input' -> $commit_hash"
     
     load_config "$config_file"
+    assert_remote_directory "$REMOTE_PATH"
     
     log_info "Récupération des changements du commit $commit_hash..."
 
@@ -561,27 +628,22 @@ deploy_commit() {
     
     log_info "Upload vers SFTP..."
     
-    # Pré-créer les dossiers distants requis via SSH (mkdir -p)
-    local ssh_cmd=$(build_ssh_command "ssh")
-    # Vérifier que le répertoire distant existe
-    if ! $ssh_cmd "test -d \"$REMOTE_PATH\""; then
-        log_error "Répertoire distant introuvable: $REMOTE_PATH"
-        exit 1
-    fi
-    if [ -n "$files_am" ]; then
-        while IFS= read -r f; do
-            [ -z "$f" ] && continue
-            local d
-            d=$(dirname "$f")
-            [ "$d" = "." ] && continue
-            $ssh_cmd "mkdir -p \"$REMOTE_PATH/$d\"" || true
-        done <<< "$files_am"
-    fi
-
+    # Préparer le script SFTP (création des dossiers + transferts)
     # Créer le script SFTP pour l'upload
     local sftp_script="$temp_dir/upload_commands.txt"
     echo "cd $REMOTE_PATH" > "$sftp_script"
     echo "lcd $temp_dir" >> "$sftp_script"
+
+    local mkdir_targets=""
+    if [ -n "$files_am" ]; then
+        mkdir_targets=$(collect_remote_directories "$files_am")
+        if [ -n "$mkdir_targets" ]; then
+            while IFS= read -r dir; do
+                [ -z "$dir" ] && continue
+                echo "-mkdir \"$dir\"" >> "$sftp_script"
+            done <<< "$mkdir_targets"
+        fi
+    fi
     
     while IFS= read -r file; do
         [ -z "$file" ] && continue
@@ -604,6 +666,12 @@ deploy_commit() {
     local sftp_cmd=$(build_ssh_command "sftp")
     local sftp_log="$temp_dir/sftp_upload.log"
     if $sftp_cmd -b "$sftp_script" "$SSH_HOST" < /dev/null >"$sftp_log" 2>&1; then
+        if [ -n "$mkdir_targets" ]; then
+            while IFS= read -r dir; do
+                [ -z "$dir" ] && continue
+                assert_remote_directory "$REMOTE_PATH/$dir"
+            done <<< "$mkdir_targets"
+        fi
         log_success "Déploiement terminé avec succès!"
         log_info "Sauvegarde disponible dans: $backup_dir"
     else
@@ -699,6 +767,7 @@ restore_backup() {
 
     # Charger la configuration (détecte ./deploy.conf si omis)
     load_config "$config_file"
+    assert_remote_directory "$REMOTE_PATH"
 
     # Si aucune sauvegarde spécifiée, utiliser le sélecteur
     if [ -z "$backup_dir" ]; then
@@ -761,24 +830,31 @@ restore_backup() {
         done < "$am_status_file"
     fi
     
-    # Pré-créer les dossiers distants requis via SSH (mkdir -p) pour les fichiers à restaurer
-    local ssh_cmd=$(build_ssh_command "ssh")
-    if [ -n "$deployed_files" ]; then
-        while IFS= read -r file; do
-            [ -z "$file" ] && continue
-            if [ -f "$backup_dir/$file" ]; then
-                local d
-                d=$(dirname "$file")
-                [ "$d" = "." ] && continue
-                $ssh_cmd "mkdir -p \"$REMOTE_PATH/$d\"" || true
-            fi
-        done <<< "$deployed_files"
-    fi
-
     # Créer le script SFTP pour la restauration
     local temp_dir=$(mktemp -d)
     local sftp_script="$temp_dir/restore_commands.txt"
     echo "cd $REMOTE_PATH" > "$sftp_script"
+
+    local restore_files=""
+    if [ -n "$deployed_files" ]; then
+        while IFS= read -r file; do
+            [ -z "$file" ] && continue
+            if [ -f "$backup_dir/$file" ]; then
+                restore_files+="$file\n"
+            fi
+        done <<< "$deployed_files"
+    fi
+
+    local restore_dirs=""
+    if [ -n "$restore_files" ]; then
+        restore_dirs=$(collect_remote_directories "$restore_files")
+        if [ -n "$restore_dirs" ]; then
+            while IFS= read -r dir; do
+                [ -z "$dir" ] && continue
+                echo "-mkdir \"$dir\"" >> "$sftp_script"
+            done <<< "$restore_dirs"
+        fi
+    fi
     
     # Restaurer les fichiers qui existaient (utilise les chemins relatifs sauvegardés)
     while IFS= read -r file; do
@@ -806,6 +882,12 @@ restore_backup() {
     local sftp_cmd=$(build_ssh_command "sftp")
     local sftp_log="$temp_dir/sftp_restore.log"
     if $sftp_cmd -b "$sftp_script" "$SSH_HOST" < /dev/null >"$sftp_log" 2>&1; then
+        if [ -n "$restore_dirs" ]; then
+            while IFS= read -r dir; do
+                [ -z "$dir" ] && continue
+                assert_remote_directory "$REMOTE_PATH/$dir"
+            done <<< "$restore_dirs"
+        fi
         log_success "Restauration terminée avec succès!"
     else
         log_error "Erreur lors de la restauration"
