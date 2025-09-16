@@ -27,6 +27,74 @@ log_success() { echo -e "${GREEN}✅${NC} $1"; }
 log_warning() { echo -e "${YELLOW}⚠${NC} $1"; }
 log_error() { echo -e "${RED}❌${NC} $1"; }
 
+
+# Vérifie la présence des dépendances critiques et suggère une installation Homebrew
+check_prerequisites() {
+    local context="$1"
+    local -a required=()
+
+    case "$context" in
+        deploy|restore)
+            required=("git" "ssh" "sftp")
+            ;;
+        list|init|-h|--help|help|"")
+            return 0
+            ;;
+        *)
+            required=("git" "ssh" "sftp")
+            ;;
+    esac
+
+    [ ${#required[@]} -gt 0 ] || return 0
+
+    local -a missing=()
+    local cmd
+    for cmd in "${required[@]}"; do
+        if ! command -v "$cmd" >/dev/null 2>&1; then
+            missing+=("$cmd")
+        fi
+    done
+
+    [ ${#missing[@]} -gt 0 ] || return 0
+
+    log_error "Prérequis manquants détectés: ${missing[*]}"
+    log_info "Installez les dépendances suivantes via Homebrew :"
+
+    local brew_tips=""
+    for cmd in "${missing[@]}"; do
+        case "$cmd" in
+            git)
+                if [[ "$brew_tips" != *"brew install git"* ]]; then
+                    brew_tips="${brew_tips}
+  brew install git"
+                fi
+                ;;
+            ssh|sftp)
+                if [[ "$brew_tips" != *"brew install openssh"* ]]; then
+                    brew_tips="${brew_tips}
+  brew install openssh"
+                fi
+                ;;
+            *)
+                local formula="brew install $cmd"
+                if [[ "$brew_tips" != *"$formula"* ]]; then
+                    brew_tips="${brew_tips}
+  $formula"
+                fi
+                ;;
+        esac
+    done
+
+    if [ -n "$brew_tips" ]; then
+        while IFS= read -r line; do
+            [ -z "$line" ] && continue
+            log_info "$line"
+        done <<< "$brew_tips"
+    fi
+
+    exit 1
+}
+
 # Résoudre une référence Git (HEAD/branche/tag/sha) en SHA complet
 resolve_commit_ref() {
     local ref="$1"
@@ -358,6 +426,8 @@ deploy_commit() {
         show_help
         exit 1
     fi
+
+    check_prerequisites "deploy"
     
     # Résoudre la référence en SHA canonique
     local commit_hash
@@ -610,6 +680,8 @@ restore_backup() {
     local backup_dir="$1"
     local config_file="$2"
     
+    check_prerequisites "restore"
+
     # Charger la configuration (détecte ./deploy.conf si omis)
     load_config "$config_file"
 
