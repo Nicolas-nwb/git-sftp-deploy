@@ -5,6 +5,8 @@
 
 set -e
 
+APP_VERSION="0.0.1-dev" # Version de l'outil (à incrémenter lors des livraisons)
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEFAULT_CONFIG_BASENAME="deploy.conf"
 # Stocke le chemin de config effectivement utilisé (défini par load_config)
@@ -166,6 +168,7 @@ EXEMPLES:
 
 OPTIONS:
   -h, --help                   Affiche cette aide
+  -v, --version                Affiche la version de l'outil
 EOF
 }
 
@@ -989,6 +992,9 @@ case "${1:-}" in
         ;;
     "-h"|"--help"|"help")
         show_help
+        ;;
+    "-v"|"--version"|"version")
+        echo "$APP_VERSION"
         ;;
     "")
         show_help
