@@ -169,7 +169,7 @@ git-sftp-deploy/
 └── 📖 README.md                  # Cette documentation
 ```
 
-## 🔧 Installation (macOS)
+## 🔧 Installation / Mise à jour (macOS)
 
 ```bash
 # Installer la commande globale git-sftp-deploy
@@ -180,21 +180,23 @@ sudo install -m 0755 ./src/git-sftp-deploy.sh /usr/local/bin/git-sftp-deploy
 which git-sftp-deploy && git-sftp-deploy --help
 ```
 
-### Installation directe depuis GitHub (sans cloner)
+### Depuis GitHub (sans cloner)
 
 ```bash
 # macOS/Linux avec curl
-sudo curl -fsSL -o /usr/local/bin/git-sftp-deploy \
-  https://raw.githubusercontent.com/Nicolas-nwb/git-sftp-deploy/main/src/git-sftp-deploy.sh && \
+sudo curl -fsSL -H 'Cache-Control: no-cache' \
+  "https://raw.githubusercontent.com/Nicolas-nwb/git-sftp-deploy/main/src/git-sftp-deploy.sh?cb=$(date +%s)" \
+  -o /usr/local/bin/git-sftp-deploy && \
   sudo chmod 0755 /usr/local/bin/git-sftp-deploy
 
 # Alternative avec wget
 sudo wget -qO /usr/local/bin/git-sftp-deploy \
-  https://raw.githubusercontent.com/Nicolas-nwb/git-sftp-deploy/main/src/git-sftp-deploy.sh && \
+  --header='Cache-Control: no-cache' \
+  "https://raw.githubusercontent.com/Nicolas-nwb/git-sftp-deploy/main/src/git-sftp-deploy.sh?cb=$(date +%s)" && \
   sudo chmod 0755 /usr/local/bin/git-sftp-deploy
 
 # Vérification
-which git-sftp-deploy && git-sftp-deploy --help
+which git-sftp-deploy && git-sftp-deploy -v && git-sftp-deploy --help
 ```
 
 ```bash
