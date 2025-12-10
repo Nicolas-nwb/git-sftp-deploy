@@ -901,7 +901,7 @@ restore_backup() {
 
     local restore_dirs=""
     if [ -n "$restore_files" ]; then
-        restore_dirs=$(collect_remote_directories "$restore_files")
+        restore_dirs=$(collect_remote_directories "$(printf '%b' "$restore_files")")
         if [ -n "$restore_dirs" ]; then
             local dir
             while IFS= read -r dir; do
