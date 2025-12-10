@@ -7,11 +7,6 @@ services:
       - remote_www:/var/www/html
     environment:
       - TZ=UTC
-    networks:
-      default:
-        aliases:
-          - sftp
-        ipv4_address: 172.28.0.10
 
   dev:
     build:
@@ -23,16 +18,6 @@ services:
     volumes: []
     environment:
       - TZ=UTC
-    networks:
-      default:
-        ipv4_address: 172.28.0.11
-
-networks:
-  default:
-    name: git-sftp-deploy_net
-    ipam:
-      config:
-        - subnet: 172.28.0.0/16
 
 volumes:
   remote_www:

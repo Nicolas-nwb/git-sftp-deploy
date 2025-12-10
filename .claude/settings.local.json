@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(docker network ls:*)",
+      "Bash(xargs:*)",
+      "Bash(docker network inspect:*)"
+    ]
+  }
+}

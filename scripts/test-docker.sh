@@ -10,10 +10,10 @@ docker compose build --pull
 echo "[orchestrator] Démarrage des services (sftp + dev)..."
 docker compose up -d sftp dev
 
-echo "[orchestrator] Attente SFTP prêt (tcp 172.28.0.10:22)..."
+echo "[orchestrator] Attente SFTP prêt (tcp sftp:22)..."
 docker compose exec -T dev bash -lc '
 for i in {1..60}; do
-  if (echo > /dev/tcp/172.28.0.10/22) >/dev/null 2>&1; then
+  if (echo > /dev/tcp/sftp/22) >/dev/null 2>&1; then
     echo "ready"; exit 0;
   fi
   sleep 1
