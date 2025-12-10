@@ -51,6 +51,9 @@ run_dev() {
   fi
 }
 
+echo "[orchestrator] Lancement des tests unitaires dans dev..."
+run_dev "Unit tests" "chmod +x scripts/inside-dev/test-unit-functions.sh && scripts/inside-dev/test-unit-functions.sh"
+
 echo "[orchestrator] Lancement des tests de base dans dev..."
 run_dev "Basic tests" "chmod +x scripts/inside-dev/run-tests.sh && scripts/inside-dev/run-tests.sh"
 

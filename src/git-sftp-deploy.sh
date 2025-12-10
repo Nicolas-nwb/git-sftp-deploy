@@ -417,7 +417,7 @@ collect_remote_directories() {
             else
                 partial="$partial/${parts[i]}"
             fi
-            if ! printf '%s\n' "$seen" | grep -Fxq "$partial"; then
+            if ! printf '%b' "$seen" | grep -Fxq "$partial"; then
                 result+="$partial\n"
                 seen+="$partial\n"
             fi

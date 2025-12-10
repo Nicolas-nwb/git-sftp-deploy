@@ -3,7 +3,10 @@
     "allow": [
       "Bash(docker network ls:*)",
       "Bash(xargs:*)",
-      "Bash(docker network inspect:*)"
+      "Bash(docker network inspect:*)",
+      "Bash(./scripts/inside-dev/test-unit-functions.sh:*)",
+      "Bash(bash -x ./scripts/inside-dev/test-unit-functions.sh:*)",
+      "Bash(bash -c '\nsource <(sed -n \"\"/^collect_remote_directories()/,/^}/p\"\" src/git-sftp-deploy.sh)\n\ninput=\"\"web/css/a.css\nweb/css/b.css\nweb/css/c.css\nweb/js/a.js\nweb/js/b.js\"\"\n\nresult=$(collect_remote_directories \"\"$input\"\")\necho \"\"Résultat:\"\"\necho \"\"$result\"\"\necho \"\"\"\"\necho \"\"Comptage de web:\"\"\necho \"\"$result\"\" | grep -Fxc \"\"web\"\" || echo 0\n')"
     ]
   }
 }
